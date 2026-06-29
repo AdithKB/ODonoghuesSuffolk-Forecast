@@ -107,6 +107,13 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 [data-testid="stExpander"] summary:hover { color: var(--text-pri) !important; }
 [data-testid="stWidgetLabel"] p { font-size: 0.75rem !important; color: var(--text-sec) !important; font-weight: 500 !important; }
 
+/* ── Briefing Card ── */
+.briefing-card { display: flex; flex-direction: column; gap: 1rem; }
+.briefing-headline { font-size: 1rem; font-weight: 600; color: var(--text-pri); line-height: 1.4; padding-left: 0.75rem; font-family: var(--sans); }
+.briefing-bucket { display: flex; flex-direction: column; gap: 0.25rem; }
+.briefing-bucket-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; color: var(--text-ter); text-transform: uppercase; font-family: var(--sans); }
+.briefing-bucket-text { font-size: 0.82rem; color: var(--text-sec); line-height: 1.55; font-family: var(--sans); }
+
 /* ── Forecast Drivers List ── */
 .driver-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-dim); }
 .driver-row:last-child { border-bottom: none; }
@@ -522,82 +529,185 @@ def render_hourly_chart(forecast: pd.DataFrame):
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-def render_signals_panel(forecast, forecast_date):
-    wd = forecast_date.weekday()
-    wd_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    wd_intensity = {0:"low",1:"low",2:"low",3:"low",4:"medium",5:"medium",6:"low"}
+def _col(forecast, col, default=0):
+    """Safely get a scalar or max value from a forecast column."""
+    if col not in forecast.columns:
+        return default
+    vals = pd.to_numeric(forecast[col], errors="coerce").fillna(0)
+    return float(vals.max())
 
-    signals = []
-    flags = {
-        "st_patricks_week_flag":    ("St. Patrick's Festival week",  "high"),
-        "new_years_eve_flag":       ("New Year's Eve",               "high"),
-        "bloomsday_flag":           ("Bloomsday (16 Jun)",           "high"),
-        "aviva_event_flag":         ("Aviva Stadium event",          "high"),
-        "croke_park_event_flag":    ("Croke Park event",             "high"),
-        "major_sports_event_flag":  ("Major sports event",           "high"),
-        "bloomsday_week_flag":      ("Bloomsday festival week",      "medium"),
-        "summer_tourism_flag":      ("Summer tourism peak",          "medium"),
-        "christmas_market_flag":    ("Christmas markets season",     "medium"),
-        "nearby_venue_event_flag":  ("Nearby venue event",           "medium"),
-        "city_event_flag":          ("City event",                   "medium"),
-        "special_event_flag":       ("Special / private event",      "medium"),
-        "bank_holiday_flag":        ("Bank holiday",                 "medium"),
-        "cruise_ship_flag":         ("Cruise ship in port",          "medium"),
-        "college_term_flag":        ("TCD term time",                "low"),
-        "school_holiday_flag":      ("School holidays",              "low"),
-        "payday_period_flag":       ("Payday period",                "low"),
-    }
-    for col, (text, level) in flags.items():
-        if col in forecast.columns and forecast[col].astype(float).any():
-            signals.append((text, level))
+def generate_briefing(forecast, forecast_date):
+    wd      = forecast_date.weekday()
+    day     = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][wd]
+    is_wknd = wd >= 4
 
-    if "failte_event_count" in forecast.columns:
-        n = int(pd.to_numeric(forecast["failte_event_count"], errors="coerce").fillna(0).iloc[0])
-        if n > 0:
-            level = "high" if n >= 5 else "medium" if n >= 2 else "low"
-            signals.append((f"{n} Failte Ireland events within 5km", level))
+    rain        = _col(forecast, "rain_mm")
+    temp        = float(pd.to_numeric(forecast["temp_c"], errors="coerce").mean()) if "temp_c" in forecast.columns else 12.0
+    cruise      = _col(forecast, "cruise_ship_flag")
+    airport_z   = _col(forecast, "airport_arrivals_zscore")
+    live_music  = _col(forecast, "is_live_music_window")
+    aviva       = _col(forecast, "aviva_event_flag")
+    croke       = _col(forecast, "croke_park_event_flag")
+    sports      = _col(forecast, "major_sports_event_flag")
+    special     = _col(forecast, "special_event_flag")
+    st_pats     = _col(forecast, "st_patricks_week_flag")
+    bloomsday   = _col(forecast, "bloomsday_flag")
+    bloomsweek  = _col(forecast, "bloomsday_week_flag")
+    nye         = _col(forecast, "new_years_eve_flag")
+    xmas        = _col(forecast, "christmas_market_flag")
+    bank_hol    = _col(forecast, "bank_holiday_flag")
+    summer      = _col(forecast, "summer_tourism_flag")
+    college     = _col(forecast, "college_term_flag")
+    school_hols = _col(forecast, "school_holiday_flag")
+    payday      = _col(forecast, "payday_period_flag")
+    failte_n    = int(_col(forecast, "failte_event_count"))
+    city_event  = _col(forecast, "city_event_flag")
+    nearby      = _col(forecast, "nearby_venue_event_flag")
 
-    signals.append((wd_names[wd], wd_intensity[wd]))
+    total = float(forecast["orders_count_xgb"].sum()) if "orders_count_xgb" in forecast.columns else 0
 
-    if "is_live_music_window" in forecast.columns and forecast["is_live_music_window"].astype(float).any():
-        time_str = "22:00 – 01:00" if wd in (4, 5) else "21:30 – 23:30"
-        signals.append((f"Live music ({time_str})", "high"))
+    # ── Headline ────────────────────────────────────────────────────────────
+    if total > 650: vibe = "Slammed"
+    elif total > 450: vibe = "Busy"
+    elif total > 280: vibe = "Standard"
+    else: vibe = "Quiet"
 
-    if "rain_mm" in forecast.columns:
-        rain = forecast["rain_mm"].mean()
-        if rain > 5:
-            signals.append((f"Heavy rain ({rain:.0f}mm) — indoor trade elevated", "medium"))
-        elif rain > 1:
-            signals.append((f"Light rain ({rain:.0f}mm)", "low"))
-        else:
-            signals.append(("Dry conditions", "low"))
+    drivers = []
+    if nye:         drivers.append("New Year's Eve")
+    if bloomsday:   drivers.append("Bloomsday")
+    if st_pats:     drivers.append("St. Patrick's week")
+    if aviva:       drivers.append("Aviva match day")
+    if croke:       drivers.append("Croke Park event")
+    if sports and not aviva and not croke: drivers.append("major sporting event")
+    if special:     drivers.append("private event on")
+    if cruise:      drivers.append("cruise ship in port")
+    if bank_hol:    drivers.append("bank holiday")
+    if live_music and not drivers: drivers.append("live music tonight")
+    if rain > 8 and not drivers:   drivers.append("heavy rain")
 
-    if "airport_arrivals_zscore" in forecast.columns:
-        z = float(forecast["airport_arrivals_zscore"].iloc[0])
-        if z > 1.0:
-            signals.append(("Airport arrivals above average", "medium"))
-        elif z < -1.0:
-            signals.append(("Airport arrivals below average", "low"))
-
-    html_parts = ['<div class="panel-card"><div class="panel-title">Today\'s Signals</div>']
-    
-    if not signals:
-        html_parts.append('<div style="color:var(--text-sec);font-size:0.85rem;">No elevated signals today.</div>')
+    if drivers:
+        headline = f"{vibe} {day} — {', '.join(drivers[:2])}."
     else:
-        high_sigs   = [(t, l) for t, l in signals if l == "high"]
-        medium_sigs = [(t, l) for t, l in signals if l == "medium"]
-        low_sigs    = [(t, l) for t, l in signals if l == "low"]
+        headline = f"Standard {day} — local and regular trade expected."
 
-        def render_group(header, items):
-            if not items: return ""
-            rows = "".join(f'<div class="sig-row"><span class="sig-pip {l}"></span>{t}</div>' for t, l in items)
-            return f'<div class="sig-group-hdr">{header}</div>{rows}'
+    # ── Bucket 1: Traffic & Tourism ─────────────────────────────────────────
+    t_parts = []
+    if cruise and airport_z > 0.5:
+        t_parts.append(f"Cruise ship in port and airport arrivals above average — strong city-centre tourist footfall expected.")
+    elif cruise:
+        t_parts.append(f"Cruise ship docked today — city-centre footfall boosted, expect higher daytime walk-in trade on Suffolk St.")
+    elif airport_z > 1.0:
+        t_parts.append(f"Airport arrivals well above the quarterly average — elevated tourist traffic across the city centre.")
+    elif airport_z < -1.0 and not cruise:
+        t_parts.append(f"No cruise ships and airport arrivals are below average — tourist footfall will be light. Local and regular trade only.")
+    else:
+        t_parts.append(f"No major tourist influx today. Footfall driven by city-centre regulars and passing trade.")
+    if summer:
+        t_parts.append("Summer tourism season: daytime browsing trade above winter baseline.")
+    if failte_n >= 2:
+        t_parts.append(f"{failte_n} Failte Ireland-listed events within 5km — increased visitor dwell time in the area.")
+    elif failte_n == 1:
+        t_parts.append(f"One organised event nearby — minor boost to passing trade possible.")
+    if city_event or nearby:
+        t_parts.append("City or nearby venue event may redirect some footfall towards Suffolk St in the evening.")
 
-        html_parts.append(render_group("High pressure", high_sigs))
-        html_parts.append(render_group("Moderate", medium_sigs))
-        html_parts.append(render_group("Context", low_sigs))
-    
-    html_parts.append('</div>')
+    # ── Bucket 2: Weather ───────────────────────────────────────────────────
+    w_parts = []
+    if rain > 8:
+        w_parts.append(f"Heavy rain forecast ({rain:.0f}mm, {temp:.0f}°C) — people will seek shelter. Good for bar and food trade; outdoor smoking area will be quiet.")
+    elif rain > 3:
+        w_parts.append(f"Rain expected ({rain:.0f}mm, {temp:.0f}°C) — wet weather nudges indoor dwell time up. Minor uplift for drink rounds.")
+    elif rain > 0.5:
+        w_parts.append(f"Light showers possible ({rain:.1f}mm, {temp:.0f}°C) — unlikely to significantly shift trade patterns.")
+    elif temp > 18:
+        w_parts.append(f"Warm and dry ({temp:.0f}°C) — pleasant evening, expect good retention and later departures. Competition from outdoor venues higher.")
+    elif temp < 7:
+        w_parts.append(f"Cold today ({temp:.0f}°C) — people will want to stay warm once inside. Good for food and hot drinks.")
+    else:
+        w_parts.append(f"Mild and dry ({temp:.0f}°C) — neutral weather, no significant impact expected on trade direction.")
+
+    # ── Bucket 3: Events & Nightlife ────────────────────────────────────────
+    e_parts = []
+    if nye:
+        e_parts.append("New Year's Eve — the biggest trade night of the year. All hands on deck, stock checked and doubled.")
+    if bloomsday:
+        e_parts.append("Bloomsday (16 June) — literary festival draws a strong city-centre crowd. Expect busy afternoon and evening.")
+    elif bloomsweek:
+        e_parts.append("Bloomsday festival week — elevated cultural tourism footfall throughout the week.")
+    if st_pats:
+        e_parts.append("St. Patrick's week — city centre significantly busier than normal. All shifts elevated, staff accordingly.")
+    if xmas:
+        e_parts.append("Christmas markets in season — lunchtime and early-evening trade boosted by shoppers and tourists.")
+    if aviva:
+        e_parts.append("Aviva Stadium event today — significant pre- and post-match trade on Leeson St and surrounds. Stock bar early.")
+    if croke:
+        e_parts.append("Croke Park event — north-city crowd, impact on Suffolk St is secondary but post-match spillover is possible.")
+    if sports and not aviva and not croke:
+        e_parts.append("Major sporting fixture on — expect sharp spikes in bar trade around kick-off and full-time. Keep bar fully staffed.")
+    if bank_hol:
+        e_parts.append("Bank holiday — patterns shift; expect a later, longer evening crowd rather than a lunchtime peak.")
+    if special:
+        e_parts.append("Private or special event flagged — confirm booking details and ensure dedicated cover.")
+    if live_music:
+        music_rows = forecast[pd.to_numeric(forecast.get("is_live_music_window", pd.Series([0])), errors="coerce").fillna(0) > 0]
+        if not music_rows.empty and "hour" in music_rows.columns:
+            sh = int(music_rows["hour"].min())
+            eh = int(music_rows["hour"].max()) + 1
+            e_parts.append(f"Live music {sh:02d}:00–{eh:02d}:00 — late bar typically sees elevated demand on music nights. Ensure bar staff levels are sufficient.")
+        else:
+            e_parts.append("Live music scheduled tonight — elevated late bar demand expected.")
+    if not e_parts:
+        e_parts.append("No venue events or major fixtures today. Trade will follow the standard daily pattern.")
+
+    # ── Bucket 4: Context ───────────────────────────────────────────────────
+    c_parts = []
+    if payday:
+        c_parts.append("End-of-month payday period — discretionary spend typically higher across all shifts.")
+    if college and not school_hols:
+        c_parts.append("TCD term in session — student crowd expected mid-evening, particularly Thursday–Saturday.")
+    if school_hols:
+        c_parts.append("School holidays — family demographic higher at lunch; evening crowd skews older.")
+    if is_wknd and not c_parts:
+        c_parts.append(f"{day} — weekend pattern: slower morning, stronger evening and late bar.")
+    elif not c_parts:
+        c_parts.append(f"{day} — weekday pattern: lunchtime office trade, quieter mid-afternoon, evening pickup.")
+
+    return dict(
+        headline=headline, vibe=vibe,
+        tourism=" ".join(t_parts),
+        weather=" ".join(w_parts),
+        events=" ".join(e_parts),
+        context=" ".join(c_parts),
+    )
+
+def render_signals_panel(forecast, forecast_date):
+    brief = generate_briefing(forecast, forecast_date)
+
+    vibe_colour = {"Slammed": "#EF4444", "Busy": "#F59E0B", "Standard": "#3B82F6", "Quiet": "#52525B"}
+    vc = vibe_colour.get(brief["vibe"], "#52525B")
+
+    buckets = [
+        ("TRAFFIC & TOURISM", brief["tourism"]),
+        ("WEATHER",           brief["weather"]),
+        ("EVENTS & NIGHTLIFE",brief["events"]),
+        ("CONTEXT",           brief["context"]),
+    ]
+    bucket_html = ""
+    for label, text in buckets:
+        bucket_html += (
+            f'<div class="briefing-bucket">'
+            f'<div class="briefing-bucket-label">{label}</div>'
+            f'<div class="briefing-bucket-text">{text}</div>'
+            f'</div>'
+        )
+
+    html = (
+        f'<div class="panel-card briefing-card">'
+        f'<div class="briefing-headline" style="border-left:3px solid {vc}">{brief["headline"]}</div>'
+        f'{bucket_html}'
+        f'</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
     st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 def render_feature_importance_panel(fi):
