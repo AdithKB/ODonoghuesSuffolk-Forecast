@@ -11,3 +11,30 @@ venv.bak/
 .DS_Store
 data/cron.log
 apply_ui_fixes.py
+
+# -----------------------------------------------------------------------
+# PII / Raw POS data — NEVER commit these
+# Raw exports from Des's till may contain transaction IDs, staff names,
+# payment card fragments, or customer-identifiable information.
+# Only the aggregated hourly CSV (data/synthetic/odonoghues_hourly.csv
+# or its real-data replacement) and features.parquet are safe to commit.
+# -----------------------------------------------------------------------
+data/raw/pos_*/
+data/raw/*pos*.csv
+data/raw/*pos*.xlsx
+data/raw/*export*.csv
+data/raw/*export*.xlsx
+data/raw/*transactions*.csv
+data/raw/*transactions*.xlsx
+data/raw/*till*.csv
+data/raw/*till*.xlsx
+data/raw/*sales_detail*.csv
+data/raw/*payments*.csv
+data/raw/*staff*.csv
+data/raw/des_*.csv
+data/raw/des_*.xlsx
+# Catch-all: any file dropped directly into data/raw that isn't one of the
+# known public-data files managed by refresh_data.py
+# (footfall, weather, enrichment, events, holidays etc. are fine to commit)
+*.raw_pos
+*.pos_export

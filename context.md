@@ -296,3 +296,48 @@ streamlit run dashboard/app.py
 ```bash
 python refresh_data.py
 ```
+
+---
+
+## 13. Data Privacy and PII — Critical Rules
+
+When Des exports raw POS logs from his till, the file may contain:
+- Transaction IDs, receipt numbers
+- Staff names / cashier IDs
+- Payment card fragments (last 4 digits)
+- Customer names or loyalty member IDs (depending on POS system)
+
+**None of this must ever be committed to GitHub.** The repo is public-adjacent (Streamlit Community Cloud reads it). A committed PII file is a GDPR incident.
+
+### The workflow when real data arrives
+
+```
+Des sends CSV/Excel
+      │
+      ▼
+python sanitize_pos.py --input data/raw/des_pos_export.csv
+      │   (runs locally, input file is .gitignored)
+      │   Drops all PII columns, aggregates to hourly counts
+      │
+      ▼
+data/synthetic/odonoghues_hourly.csv   ← clean, safe to commit
+      │
+      ▼
+python src/features.py && python src/model.py
+      │
+      ▼
+git add data/processed/ models/ data/synthetic/odonoghues_hourly.csv && git push
+```
+
+### What is gitignored (see .gitignore)
+- `data/raw/pos_*/` and any file matching `*pos*`, `*export*`, `*transactions*`, `*till*`, `*payments*`, `*staff*`, `des_*` in `data/raw/`
+- Only the known public-data files fetched by `refresh_data.py` (weather, footfall, enrichment, events) are committed from `data/raw/`
+
+### sanitize_pos.py
+Auto-detects timestamp and food/kitchen columns, drops PII, aggregates to hourly `(timestamp_hour, orders_count, food_tickets_count)`, and prints a PII audit log before writing output. Supports CSV and Excel input. Run with `--help` for full options.
+
+### What IS safe to commit
+- `data/synthetic/odonoghues_hourly.csv` — aggregated hourly counts, no individual transactions
+- `data/processed/features.parquet` — engineered features, no PII
+- `models/*.json` / `models/*.pkl` — trained model weights, no raw data
+- All public data in `data/raw/` fetched by `refresh_data.py`
