@@ -1,0 +1,36 @@
+date,aviva_event_flag,croke_park_event_flag,nearby_venue_event_flag,city_event_flag,event_impact_score,event_names
+2026-02-14,1,0,0,1,4,Ireland vs Italy (Six Nations)
+2026-03-06,1,0,0,1,4,Ireland vs Wales (Six Nations)
+2026-03-14,1,0,0,1,4,Ireland vs Scotland (Six Nations)
+2026-04-15,0,0,1,1,1,New Music Dublin Festival
+2026-04-16,0,0,1,1,1,New Music Dublin Festival
+2026-04-17,0,0,1,1,1,New Music Dublin Festival
+2026-04-18,0,0,1,1,1,New Music Dublin Festival
+2026-04-19,0,0,1,1,1,New Music Dublin Festival
+2026-06-11,0,0,0,1,2,Bloomsday Festival begins
+2026-06-12,0,0,0,1,2,Bloomsday Festival
+2026-06-13,0,0,0,1,2,Bloomsday Festival
+2026-06-14,0,0,0,1,2,Bloomsday Festival
+2026-06-15,0,0,0,1,2,Bloomsday Festival
+2026-06-16,0,0,0,1,3,Bloomsday (main day — Ulysses June 16)
+2026-06-28,0,0,0,1,1,Calvin Harris — Malahide Castle | Florence + The Machine — Marlay Park
+2026-06-30,0,0,1,1,2,Lily Allen | Empire of the Sun — Fairview Park
+2026-07-01,0,0,1,1,2,Lily Allen
+2026-07-03,0,0,1,1,2,Wolfe Tones | Dun Laoghaire Summerfest
+2026-07-04,1,1,1,1,3,Take That / OneRepublic | GAA Hurling All-Ireland SF (Galway v Cork) | Wolfe Tones | Dun Laoghaire Summerfest
+2026-07-05,0,1,0,1,3,GAA Hurling All-Ireland SF (Limerick v Clare) | Dun Laoghaire Summerfest
+2026-07-06,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-07,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-08,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-09,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-10,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-11,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-07-12,0,0,0,1,1,Dun Laoghaire Summerfest
+2026-08-02,0,1,0,1,2,LGFA TG4 All-Ireland Finals
+2026-08-30,0,1,0,1,3,Bon Jovi
+2026-09-05,0,1,0,1,3,Katie Taylor vs Flora Pili (boxing)
+2026-11-06,1,0,0,1,4,Ireland vs Argentina
+2026-11-14,1,0,0,1,4,Ireland vs Fiji
+2026-11-21,1,0,0,1,4,Ireland vs South Africa
+2027-02-05,1,0,0,1,4,Ireland vs England (Six Nations)
+2027-03-13,1,0,0,1,4,Ireland vs France (Six Nations)

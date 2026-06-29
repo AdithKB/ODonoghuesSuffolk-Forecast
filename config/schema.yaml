@@ -1,0 +1,118 @@
+# Hourly dataset schema — one row per hour
+# This is the contract between synthetic data, real POS exports, and the model pipeline.
+# To plug in real data: export from POS to CSV matching these column names and types.
+
+columns:
+  # --- Time key ---
+  timestamp_hour:
+    type: datetime
+    description: "UTC+1 (Irish Standard Time). Format: YYYY-MM-DD HH:00:00"
+    required: true
+
+  # --- Derived time features (auto-generated, do not fill manually) ---
+  hour:
+    type: int
+    range: [9, 23]
+  weekday:
+    type: int
+    description: "0=Monday, 6=Sunday"
+  month:
+    type: int
+    range: [1, 12]
+  is_weekend:
+    type: bool
+  week_of_year:
+    type: int
+
+  # --- Primary demand targets ---
+  food_tickets_count:
+    type: int
+    description: "Kitchen tickets fired. Zero outside food service hours (after 21:00)."
+    required: true
+  orders_count:
+    type: int
+    description: "POS transactions (food + bar). Non-zero until closing."
+    required: true
+  sales_total:
+    type: float
+    description: "EUR gross sales for the hour. Optional secondary target."
+    required: false
+  covers_count:
+    type: int
+    description: "Seated covers served. Optional — use if available."
+    required: false
+
+  # --- Shift label (operational output) ---
+  busy_label:
+    type: str
+    values: [quiet, normal, busy, slammed]
+    description: "Derived from orders_count percentile within same hour+weekday bucket."
+
+  # --- Venue events (manual flags — fill from staff knowledge or rota) ---
+  live_music_flag:
+    type: bool
+    description: "True on Sun-Thu 21:30-23:30, Fri-Sat 22:00-01:00 per confirmed schedule."
+  special_event_flag:
+    type: bool
+    description: "Private bookings, themed nights, promos."
+  promo_flag:
+    type: bool
+
+  # --- Operations context (useful for interpreting demand, not model inputs initially) ---
+  bar_staff_count:
+    type: int
+    required: false
+  kitchen_staff_count:
+    type: int
+    required: false
+  stockout_flag:
+    type: bool
+    description: "Flag hours where missing items may suppress recorded demand."
+  menu_change_flag:
+    type: bool
+
+  # --- Weather (daily values broadcast to each hour, from Met Éireann Dublin Airport) ---
+  temp_c:
+    type: float
+  rain_mm:
+    type: float
+  wind_speed_kmh:
+    type: float
+  weather_severity_flag:
+    type: bool
+    description: "True on days with severe/named weather events."
+
+  # --- Tourism signals (daily granularity, broadcast to each hour) ---
+  airport_arrivals:
+    type: int
+    description: "Daily Dublin Airport passenger arrivals from Smart Dublin dataset."
+  airport_arrivals_lag1:
+    type: int
+    description: "Previous day's arrivals — tourists arriving yesterday affect today's lunch."
+  cruise_ship_flag:
+    type: bool
+    description: "True if one or more cruise ships docked at Dublin Port that day."
+  ships_in_port_count:
+    type: int
+  cruise_passenger_estimate:
+    type: int
+    description: "Rough estimate based on vessel type if known."
+
+  # --- Calendar / event flags ---
+  bank_holiday_flag:
+    type: bool
+    description: "Irish public holidays (using 'holidays' library, country=IE)."
+  school_holiday_flag:
+    type: bool
+  payday_period_flag:
+    type: bool
+    description: "True on last 3 days and first 3 days of each month."
+  major_sports_event_flag:
+    type: bool
+    description: "Six Nations home, GAA All-Ireland, Leinster/Munster Champions Cup home."
+  city_event_flag:
+    type: bool
+    description: "St. Patrick's Day festival, Dublin Marathon, Bloomsday, large concerts."
+  st_patricks_week_flag:
+    type: bool
+    description: "March 14-17 specifically — highest demand period."
