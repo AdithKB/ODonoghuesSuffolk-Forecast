@@ -890,6 +890,25 @@ def main():
         def _sync_temp_input():  st.session_state.temp_slider = st.session_state.temp_input
         def _sync_temp_slider(): st.session_state.temp_input  = st.session_state.temp_slider
 
+        # Auto-populate from features data when date changes
+        _wx_loaded = st.session_state.get("_wx_loaded_date")
+        if _wx_loaded != forecast_date.date():
+            _day_rows = df[df["timestamp_hour"].dt.date == forecast_date.date()]
+            if not _day_rows.empty:
+                _svc = _day_rows[_day_rows["timestamp_hour"].dt.hour.between(12, 22)]
+                _src = _svc if not _svc.empty else _day_rows
+                _rain_def = round(float(_src["rain_mm"].mean()) * 2) / 2 if "rain_mm" in _src else 1.0
+                _temp_def = round(float(_src["temp_c"].mean())  * 2) / 2 if "temp_c"  in _src else 12.0
+            else:
+                _rain_def, _temp_def = 1.0, 12.0
+            _rain_def = float(max(0.0, min(20.0, _rain_def)))
+            _temp_def = float(max(0.0, min(25.0, _temp_def)))
+            st.session_state.rain_slider = _rain_def
+            st.session_state.rain_input  = _rain_def
+            st.session_state.temp_slider = _temp_def
+            st.session_state.temp_input  = _temp_def
+            st.session_state._wx_loaded_date = forecast_date.date()
+
         for k, v in [("rain_slider", 1.0), ("rain_input", 1.0),
                      ("temp_slider", 12.0), ("temp_input", 12.0)]:
             if k not in st.session_state:
