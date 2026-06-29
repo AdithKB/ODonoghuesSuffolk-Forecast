@@ -9,3 +9,5 @@ ENV/
 env.bak/
 venv.bak/
 .DS_Store
+data/cron.log
+apply_ui_fixes.py
