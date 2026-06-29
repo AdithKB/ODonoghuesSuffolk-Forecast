@@ -88,15 +88,34 @@ html, body, [data-testid="stApp"] {
 }
 [data-testid="stSidebar"] .stToggle { padding: 0.12rem 0 !important; }
 [data-testid="stSidebar"] .stToggle p { font-size: 0.8rem !important; color: var(--text-sec) !important; }
-[data-testid="stSidebar"] [data-baseweb="slider"] [role="slider"] + div {
-    font-family: var(--mono) !important; font-size: 0.72rem !important;
-}
+[data-testid="stSidebar"] .stHorizontalBlock { gap: 4px !important; flex-wrap: nowrap !important; }
+[data-testid="stSidebar"] .stHorizontalBlock > [data-testid="column"] { min-width: 0 !important; }
+
+/* Date input — clean monospace field */
+[data-testid="stSidebar"] .stDateInput > label { display: none !important; }
+[data-testid="stSidebar"] .stDateInput > div { margin-top: 0 !important; }
 [data-testid="stSidebar"] .stDateInput input {
-    font-family: var(--mono) !important; font-size: 0.75rem !important;
-    height: 30px !important; padding: 0 8px !important;
-    border: 1px solid var(--border) !important;
+    font-family: var(--mono) !important; font-size: 0.74rem !important; letter-spacing: 0.04em !important;
+    height: 32px !important; padding: 0 10px !important;
+    background: #111 !important; border: 1px solid #2a2a2a !important;
+    color: var(--text-sec) !important; border-radius: 3px !important;
+    box-shadow: none !important; outline: none !important;
 }
-[data-testid="stSidebar"] .stHorizontalBlock { gap: 4px !important; }
+[data-testid="stSidebar"] .stDateInput input:focus {
+    border-color: var(--text-ter) !important; color: var(--text-pri) !important;
+}
+
+/* Sliders — hide Streamlit's floating value tooltip */
+[data-testid="stSidebar"] [data-testid="stSliderThumbValue"] { display: none !important; }
+[data-testid="stSidebar"] .stSlider [data-testid="stSliderThumbValue"] { display: none !important; }
+[data-testid="stSidebar"] .stSlider > label { display: none !important; }
+
+/* Slider track styling */
+[data-testid="stSidebar"] [data-baseweb="slider"] > div {
+    background: #1e1e1e !important;
+    height: 2px !important;
+}
+
 .sb-section-label {
     font-size: 0.58rem; font-weight: 700; letter-spacing: 0.14em;
     color: var(--text-ter); text-transform: uppercase;
@@ -104,11 +123,17 @@ html, body, [data-testid="stApp"] {
 }
 .sb-divider { height: 1px; background: var(--border); margin: 1rem 0; }
 .sb-date-display {
-    text-align: center; padding: 4px 0;
+    text-align: center; padding: 6px 0 4px;
     font-family: var(--mono); color: var(--text-pri);
 }
-.sb-date-display .day-name { font-size: 0.58rem; color: var(--text-ter); letter-spacing: 0.12em; display: block; }
-.sb-date-display .date-str { font-size: 0.82rem; letter-spacing: 0.06em; }
+.sb-date-display .day-name { font-size: 0.55rem; color: var(--text-ter); letter-spacing: 0.14em; display: block; margin-bottom: 2px; }
+.sb-date-display .date-str { font-size: 0.85rem; letter-spacing: 0.06em; }
+.sb-slider-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 2px; margin-top: 0.6rem;
+}
+.sb-slider-label { font-size: 0.75rem; color: var(--text-sec); font-family: var(--sans); }
+.sb-slider-val { font-size: 0.7rem; color: var(--text-pri); font-family: var(--mono); letter-spacing: 0.04em; }
 [data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: 1px solid var(--border) !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stToolbarActions"] { display: none !important; }
@@ -797,13 +822,13 @@ def main():
         if "date_picker" not in st.session_state:
             st.session_state.date_picker = default_date
 
-        c_prev, c_today, c_next = st.columns(3)
-        if c_prev.button("◀", key="btn_prev", use_container_width=True):
+        c_prev, c_next = st.columns(2)
+        if c_prev.button("◀  PREV", key="btn_prev", use_container_width=True):
             st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
-        if c_today.button("TODAY", key="btn_today", use_container_width=True):
-            st.session_state.date_picker = max(available[0], min(available[-1], today))
-        if c_next.button("▶", key="btn_next", use_container_width=True):
+        if c_next.button("NEXT  ▶", key="btn_next", use_container_width=True):
             st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
+        if st.button("TODAY", key="btn_today", use_container_width=True):
+            st.session_state.date_picker = max(available[0], min(available[-1], today))
 
         d = st.session_state.get("date_picker", default_date)
         st.markdown(
@@ -835,8 +860,26 @@ def main():
 
         # — WEATHER —
         st.markdown("<p class='sb-section-label'>Weather</p>", unsafe_allow_html=True)
-        rain = st.slider("Rain",        0.0, 20.0,  1.0, 0.5, format="%1.1f mm")
-        temp = st.slider("Temperature", 0.0, 25.0, 12.0, 0.5, format="%1.1f °C")
+        if "rain_val" not in st.session_state:
+            st.session_state.rain_val = 1.0
+        if "temp_val" not in st.session_state:
+            st.session_state.temp_val = 12.0
+        st.markdown(
+            f"<div class='sb-slider-row'>"
+            f"<span class='sb-slider-label'>Rain</span>"
+            f"<span class='sb-slider-val'>{st.session_state.rain_val:.1f} mm</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        rain = st.slider("Rain", 0.0, 20.0, 1.0, 0.5, key="rain_val", label_visibility="collapsed")
+        st.markdown(
+            f"<div class='sb-slider-row'>"
+            f"<span class='sb-slider-label'>Temperature</span>"
+            f"<span class='sb-slider-val'>{st.session_state.temp_val:.1f} °C</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        temp = st.slider("Temperature", 0.0, 25.0, 12.0, 0.5, key="temp_val", label_visibility="collapsed")
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
