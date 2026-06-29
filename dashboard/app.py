@@ -750,7 +750,19 @@ def main():
         st.markdown("<h3 style='color: var(--text-pri); margin-bottom: 1rem; font-weight: 600; font-size: 1.1rem;'>Settings & Overrides</h3>", unsafe_allow_html=True)
         
         st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Forecast Date</div>", unsafe_allow_html=True)
-        sel_date = st.date_input("Forecast Date", value=default_date, min_value=available[0], max_value=available[-1], label_visibility="collapsed")
+        
+        if "date_picker" not in st.session_state:
+            st.session_state.date_picker = default_date
+            
+        c1, c2, c3 = st.columns([1, 1.2, 1])
+        if c1.button("◀ Prev", use_container_width=True):
+            st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
+        if c2.button("Today", use_container_width=True):
+            st.session_state.date_picker = max(available[0], min(available[-1], today))
+        if c3.button("Next ▶", use_container_width=True):
+            st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
+            
+        sel_date = st.date_input("Forecast Date", key="date_picker", min_value=available[0], max_value=available[-1], label_visibility="collapsed")
         forecast_date = pd.Timestamp(sel_date)
         
         st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
@@ -759,12 +771,12 @@ def main():
         special_event = st.toggle("Special event",   value=False)
         major_sports  = st.toggle("Sports event",    value=False)
         cruise        = st.toggle("Cruise ship",     value=False)
-        st_pats       = st.toggle("St. Patrick's week", value=False)
+        st_pats       = st.toggle("St. Patrick's", value=False)
         
         st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
         st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Weather</div>", unsafe_allow_html=True)
-        rain = st.slider("Rain (mm)",        0.0, 20.0, 1.0, 0.5)
-        temp = st.slider("Temperature (°C)", 0.0, 25.0, 12.0, 0.5)
+        rain = st.slider("Rain", 0.0, 20.0, 1.0, 0.5, format="%1.1f mm")
+        temp = st.slider("Temperature", 0.0, 25.0, 12.0, 0.5, format="%1.1f °C")
         
         st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
         st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Data Sync</div>", unsafe_allow_html=True)
