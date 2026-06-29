@@ -26,7 +26,7 @@ st.set_page_config(
     page_title="O'Donoghues | Forecast",
     page_icon=None,
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ---------------------------------------------------------------------------
@@ -67,9 +67,9 @@ html, body, [data-testid="stApp"] {
 
 [data-testid="stSidebar"] { background-color: var(--surface) !important; border-right: 1px solid var(--border) !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
-[data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: 1px solid var(--border) !important; }
 [data-testid="stDecoration"] { display: none !important; }
+[data-testid="stToolbarActions"] button[title="Share"], [data-testid="stToolbarActions"] button[kind="header"] { opacity: 0.3 !important; }
 
 
 .block-container {
