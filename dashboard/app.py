@@ -67,7 +67,7 @@ html, body, [data-testid="stApp"] {
 
 [data-testid="stSidebar"] { background-color: var(--surface) !important; border-right: 1px solid var(--border) !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
-[data-testid="stHeader"] { background-color: var(--bg) !important; }
+[data-testid="stHeader"] { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
 
 
@@ -190,7 +190,7 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 .table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 @media (max-width: 768px) {
-    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 1rem !important; }
+    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 3.5rem !important; }
     .hero-block { padding: 1rem; margin-bottom: 1rem; gap: 0.5rem; }
     .hero-date { font-size: 1.75rem; line-height: 1.1; }
     .hero-meta { font-size: 0.75rem; line-height: 1.4; }
