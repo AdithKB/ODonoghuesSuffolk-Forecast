@@ -103,6 +103,14 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 [data-testid="stExpander"] summary:hover { color: var(--text-pri) !important; }
 [data-testid="stWidgetLabel"] p { font-size: 0.75rem !important; color: var(--text-sec) !important; font-weight: 500 !important; }
 
+/* ── Forecast Drivers List ── */
+.driver-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-dim); }
+.driver-row:last-child { border-bottom: none; }
+.driver-label { flex: 1 1 0; font-size: 0.8rem; color: var(--text-sec); min-width: 0; }
+.driver-bar-wrap { flex: 0 0 80px; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+.driver-bar { height: 100%; background: #52525B; border-radius: 2px; }
+.driver-pct { flex: 0 0 3.5rem; text-align: right; font-size: 0.75rem; color: var(--text-pri); font-family: var(--mono); }
+
 /* ── Custom HTML Table ── */
 .custom-table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 1rem; }
 .custom-table th { text-align: right; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); color: var(--text-sec); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.65rem;}
@@ -589,35 +597,26 @@ def render_signals_panel(forecast, forecast_date):
     st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 def render_feature_importance_panel(fi):
-    st.markdown('<div class="panel-card" style="display:flex; flex-direction:column;"><div class="panel-title">Forecast Drivers</div>', unsafe_allow_html=True)
     if "orders_count" not in fi:
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-card"><div class="panel-title">Forecast Drivers</div><div style="color:var(--text-sec);font-size:0.85rem;">No data.</div></div>', unsafe_allow_html=True)
         return
-        
-    df = fi["orders_count"].head(7).copy()
-    df["label"] = df["feature"].map(HUMAN_LABELS).fillna(df["feature"].str.replace("_", " "))
-    df["label"] = df["label"].apply(lambda x: x[:22] + "..." if len(x) > 22 else x)
-    df = df.sort_values("importance_pct")
 
-    fig = go.Figure(go.Bar(
-        x=df["importance_pct"], y=df["label"],
-        orientation="h", marker_color="#52525B",
-        text=df["importance_pct"].round(1).astype(str) + "%",
-        textposition="outside",
-        textfont=dict(size=10, color="#FAFAFA", family="JetBrains Mono, monospace"),
-    ))
-    fig.update_layout(
-        template="plotly_dark", height=240,
-        dragmode=False,
-        margin=dict(l=0, r=40, t=10, b=0),
-        xaxis_title=None, yaxis_title=None,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(gridcolor="rgba(0,0,0,0)", zeroline=False, tickfont=dict(size=10, color="#E2E3E6", family="Inter, sans-serif")),
-        bargap=0.3
-    )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    st.markdown('</div>', unsafe_allow_html=True)
+    df = fi["orders_count"].head(7).copy()
+    df["label"] = df["feature"].map(HUMAN_LABELS).fillna(df["feature"].str.replace("_", " ").str.title())
+    df = df.sort_values("importance_pct", ascending=False)
+    max_pct = df["importance_pct"].max() or 1
+
+    rows = ""
+    for _, row in df.iterrows():
+        bar_w = int(row["importance_pct"] / max_pct * 100)
+        rows += (
+            f'<div class="driver-row">'
+            f'<span class="driver-label">{row["label"]}</span>'
+            f'<div class="driver-bar-wrap"><div class="driver-bar" style="width:{bar_w}%"></div></div>'
+            f'<span class="driver-pct">{row["importance_pct"]:.1f}%</span>'
+            f'</div>'
+        )
+    st.markdown(f'<div class="panel-card"><div class="panel-title">Forecast Drivers</div>{rows}</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Main
