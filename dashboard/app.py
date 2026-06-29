@@ -92,18 +92,17 @@ html, body, [data-testid="stApp"] {
 [data-testid="stSidebar"] [data-testid="stTickBarMin"],
 [data-testid="stSidebar"] [data-testid="stTickBarMax"] { display: none !important; }
 
-/* Date input — clean monospace field */
-[data-testid="stSidebar"] .stDateInput > label { display: none !important; }
-[data-testid="stSidebar"] .stDateInput > div { margin-top: 0 !important; }
-[data-testid="stSidebar"] .stDateInput input {
-    font-family: var(--mono) !important; font-size: 0.74rem !important; letter-spacing: 0.04em !important;
-    height: 32px !important; padding: 0 10px !important;
-    background: #111 !important; border: 1px solid #2a2a2a !important;
-    color: var(--text-sec) !important; border-radius: 3px !important;
-    box-shadow: none !important; outline: none !important;
+/* Date input: invisible overlay on the date display — tapping it opens the calendar */
+[data-testid="stSidebar"] .stDateInput {
+    position: relative !important;
+    margin-top: -64px !important;
+    height: 64px !important;
+    z-index: 20 !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
 }
-[data-testid="stSidebar"] .stDateInput input:focus {
-    border-color: var(--text-ter) !important; color: var(--text-pri) !important;
+[data-testid="stSidebar"] .stDateInput input {
+    height: 64px !important; width: 100% !important; cursor: pointer !important;
 }
 
 /* Sliders — hide Streamlit's floating value tooltip */
@@ -126,6 +125,7 @@ html, body, [data-testid="stApp"] {
 .sb-date-display {
     text-align: center; padding: 6px 0 4px;
     font-family: var(--mono); color: var(--text-pri);
+    position: relative; cursor: pointer;
 }
 .sb-date-display .day-name { font-size: 0.55rem; color: var(--text-ter); letter-spacing: 0.14em; display: block; margin-bottom: 2px; }
 .sb-date-display .date-str { font-size: 0.85rem; letter-spacing: 0.06em; }
