@@ -649,13 +649,8 @@ def generate_briefing(forecast, forecast_date):
     if special:
         e_parts.append("Private or special event flagged — confirm booking details and ensure dedicated cover.")
     if live_music:
-        music_rows = forecast[pd.to_numeric(forecast.get("is_live_music_window", pd.Series([0])), errors="coerce").fillna(0) > 0]
-        if not music_rows.empty and "hour" in music_rows.columns:
-            sh = int(music_rows["hour"].min())
-            eh = int(music_rows["hour"].max()) + 1
-            e_parts.append(f"Live music {sh:02d}:00–{eh:02d}:00 — late bar typically sees elevated demand on music nights. Ensure bar staff levels are sufficient.")
-        else:
-            e_parts.append("Live music scheduled tonight — elevated late bar demand expected.")
+        music_time = "22:00–01:00" if is_wknd else "21:30–23:30"
+        e_parts.append(f"Live music {music_time} — late bar typically sees elevated demand on music nights. Ensure bar staff levels are sufficient.")
     if not e_parts:
         e_parts.append("No venue events or major fixtures today. Trade will follow the standard daily pattern.")
 
