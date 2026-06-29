@@ -498,7 +498,7 @@ def render_hourly_chart(forecast: pd.DataFrame):
         paper_bgcolor="rgba(0,0,0,0)",
         bargap=0.3,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 def render_signals_panel(forecast, forecast_date):
     wd = forecast_date.weekday()
@@ -605,7 +605,7 @@ def render_feature_importance_panel(fi):
         yaxis=dict(gridcolor="rgba(0,0,0,0)", zeroline=False, tickfont=dict(size=10, color="#E2E3E6", family="Inter, sans-serif")),
         bargap=0.3
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
