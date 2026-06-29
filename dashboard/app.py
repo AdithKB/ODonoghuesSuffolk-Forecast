@@ -835,7 +835,19 @@ def main():
         if "date_picker" not in st.session_state:
             st.session_state.date_picker = default_date
 
-        # Date display first — tap it to open the native calendar
+        # Callbacks run between reruns — safe to modify widget-bound keys here
+        def _prev_day():
+            cur = st.session_state.get("date_picker", default_date)
+            st.session_state.date_picker = max(available[0], cur - datetime.timedelta(days=1))
+
+        def _next_day():
+            cur = st.session_state.get("date_picker", default_date)
+            st.session_state.date_picker = min(available[-1], cur + datetime.timedelta(days=1))
+
+        def _goto_today():
+            st.session_state.date_picker = max(available[0], min(available[-1], today))
+
+        # Date display first — tap to open the native calendar
         d = st.session_state.get("date_picker", default_date)
         st.markdown(
             f"<div class='sb-date-display'>"
@@ -852,14 +864,11 @@ def main():
         )
         forecast_date = pd.Timestamp(sel_date)
 
-        # Navigation below the date
+        # Navigation below the date — callbacks keep session_state writes safe
         c_prev, c_next = st.columns(2)
-        if c_prev.button("◀  PREV", key="btn_prev", use_container_width=True):
-            st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
-        if c_next.button("NEXT  ▶", key="btn_next", use_container_width=True):
-            st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
-        if st.button("TODAY", key="btn_today", use_container_width=True):
-            st.session_state.date_picker = max(available[0], min(available[-1], today))
+        c_prev.button("◀  PREV", key="btn_prev", use_container_width=True, on_click=_prev_day)
+        c_next.button("NEXT  ▶", key="btn_next", use_container_width=True, on_click=_next_day)
+        st.button("TODAY", key="btn_today", use_container_width=True, on_click=_goto_today)
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
