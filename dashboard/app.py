@@ -67,6 +67,48 @@ html, body, [data-testid="stApp"] {
 
 [data-testid="stSidebar"] { background-color: var(--surface) !important; border-right: 1px solid var(--border) !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
+
+/* ── Sidebar redesign ─────────────────────────────────────────────────── */
+[data-testid="stSidebar"] .stButton > button {
+    height: 26px !important; min-height: 26px !important;
+    padding: 0 6px !important;
+    font-size: 0.68rem !important; font-family: var(--mono) !important; font-weight: 500 !important;
+    background: transparent !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-ter) !important;
+    border-radius: 2px !important; line-height: 1 !important;
+    letter-spacing: 0.08em !important; transition: none !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: var(--surface-hover) !important;
+    color: var(--text-sec) !important; border-color: var(--text-ter) !important;
+}
+[data-testid="stSidebar"] .stButton > button:active {
+    background: var(--border) !important; color: var(--text-pri) !important;
+}
+[data-testid="stSidebar"] .stToggle { padding: 0.12rem 0 !important; }
+[data-testid="stSidebar"] .stToggle p { font-size: 0.8rem !important; color: var(--text-sec) !important; }
+[data-testid="stSidebar"] [data-baseweb="slider"] [role="slider"] + div {
+    font-family: var(--mono) !important; font-size: 0.72rem !important;
+}
+[data-testid="stSidebar"] .stDateInput input {
+    font-family: var(--mono) !important; font-size: 0.75rem !important;
+    height: 30px !important; padding: 0 8px !important;
+    border: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] .stHorizontalBlock { gap: 4px !important; }
+.sb-section-label {
+    font-size: 0.58rem; font-weight: 700; letter-spacing: 0.14em;
+    color: var(--text-ter); text-transform: uppercase;
+    margin: 0 0 0.5rem; font-family: var(--mono);
+}
+.sb-divider { height: 1px; background: var(--border); margin: 1rem 0; }
+.sb-date-display {
+    text-align: center; padding: 4px 0;
+    font-family: var(--mono); color: var(--text-pri);
+}
+.sb-date-display .day-name { font-size: 0.58rem; color: var(--text-ter); letter-spacing: 0.12em; display: block; }
+.sb-date-display .date-str { font-size: 0.82rem; letter-spacing: 0.06em; }
 [data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: 1px solid var(--border) !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stToolbarActions"] { display: none !important; }
@@ -747,39 +789,62 @@ def main():
 
     # ── Sidebar Controls ─────────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("<h3 style='color: var(--text-pri); margin-bottom: 1rem; font-weight: 600; font-size: 1.1rem;'>Settings & Overrides</h3>", unsafe_allow_html=True)
-        
-        st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Forecast Date</div>", unsafe_allow_html=True)
-        
+        st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+
+        # — DATE —
+        st.markdown("<p class='sb-section-label'>Date</p>", unsafe_allow_html=True)
+
         if "date_picker" not in st.session_state:
             st.session_state.date_picker = default_date
-            
-        c1, c2, c3 = st.columns([1, 1.2, 1])
-        if c1.button("◀ Prev", use_container_width=True):
+
+        c_prev, c_mid, c_next = st.columns([1, 4, 1])
+        if c_prev.button("◀", key="btn_prev", use_container_width=True):
             st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
-        if c2.button("Today", use_container_width=True):
-            st.session_state.date_picker = max(available[0], min(available[-1], today))
-        if c3.button("Next ▶", use_container_width=True):
+        with c_mid:
+            d = st.session_state.get("date_picker", default_date)
+            st.markdown(
+                f"<div class='sb-date-display'>"
+                f"<span class='day-name'>{d.strftime('%A').upper()}</span>"
+                f"<span class='date-str'>{d.strftime('%-d %b %Y').upper()}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        if c_next.button("▶", key="btn_next", use_container_width=True):
             st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
-            
-        sel_date = st.date_input("Forecast Date", key="date_picker", min_value=available[0], max_value=available[-1], label_visibility="collapsed")
+
+        _, c_today, _ = st.columns([1, 2, 1])
+        with c_today:
+            if st.button("TODAY", key="btn_today", use_container_width=True):
+                st.session_state.date_picker = max(available[0], min(available[-1], today))
+
+        sel_date = st.date_input(
+            "Forecast Date", key="date_picker",
+            min_value=available[0], max_value=available[-1],
+            label_visibility="collapsed",
+        )
         forecast_date = pd.Timestamp(sel_date)
-        
-        st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
-        st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Overrides</div>", unsafe_allow_html=True)
-        live_music    = st.toggle("Live music",      value=True)
-        special_event = st.toggle("Special event",   value=False)
-        major_sports  = st.toggle("Sports event",    value=False)
-        cruise        = st.toggle("Cruise ship",     value=False)
+
+        st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
+
+        # — OVERRIDES —
+        st.markdown("<p class='sb-section-label'>Overrides</p>", unsafe_allow_html=True)
+        live_music    = st.toggle("Live music",    value=True)
+        special_event = st.toggle("Special event", value=False)
+        major_sports  = st.toggle("Sports event",  value=False)
+        cruise        = st.toggle("Cruise ship",   value=False)
         st_pats       = st.toggle("St. Patrick's", value=False)
-        
-        st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
-        st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Weather</div>", unsafe_allow_html=True)
-        rain = st.slider("Rain", 0.0, 20.0, 1.0, 0.5, format="%1.1f mm")
+
+        st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
+
+        # — WEATHER —
+        st.markdown("<p class='sb-section-label'>Weather</p>", unsafe_allow_html=True)
+        rain = st.slider("Rain",        0.0, 20.0,  1.0, 0.5, format="%1.1f mm")
         temp = st.slider("Temperature", 0.0, 25.0, 12.0, 0.5, format="%1.1f °C")
-        
-        st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px solid var(--border);'>", unsafe_allow_html=True)
-        st.markdown("<div style='font-size: 0.8rem; color: var(--text-sec); margin-bottom: 0.5rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Data Sync</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
+
+        # — DATA SYNC —
+        st.markdown("<p class='sb-section-label'>Data Sync</p>", unsafe_allow_html=True)
         if st.button("Refresh Live Data", use_container_width=True):
             with st.spinner("Fetching..."):
                 subprocess.run([sys.executable, "src/refresh_data.py"], capture_output=True, cwd=Path(__file__).parent.parent)
