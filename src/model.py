@@ -9,6 +9,7 @@ Evaluation via walk-forward (rolling-origin) cross-validation.
 Models saved to models/ for dashboard consumption.
 """
 
+import json
 import numpy as np
 import pandas as pd
 import joblib
@@ -16,8 +17,11 @@ import warnings
 from pathlib import Path
 from dataclasses import dataclass, field
 
+import optuna
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import xgboost as xgb
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -32,6 +36,25 @@ SHIFTS = [
     ("dinner",  17, 20),
     ("late_bar", 21, 1),   # wraps midnight; handled separately
 ]
+
+# Shift segments for per-shift model training
+SHIFT_SEGMENTS = {
+    "lunch":    lambda h: (h >= 12) & (h <= 15),
+    "evening":  lambda h: (h >= 17) & (h <= 20),
+    "late_bar": lambda h: (h >= 21) | (h <= 2),
+    "off_peak": lambda h: ((h >= 9) & (h <= 11)) | (h == 16),
+}
+
+
+def get_hour_shift(hour: int) -> str:
+    """Map a single hour value to its shift bucket name."""
+    if 12 <= hour <= 15:
+        return "lunch"
+    if 17 <= hour <= 20:
+        return "evening"
+    if hour >= 21 or hour <= 2:
+        return "late_bar"
+    return "off_peak"
 
 # Busy-label thresholds (percentile of training shift totals per shift type)
 LABEL_THRESHOLDS = {"quiet": 0.25, "normal": 0.65, "busy": 0.88}
@@ -72,6 +95,9 @@ SAFE_FOR_NEXT_DAY = [
     # City pedestrian footfall lags (safe — use yesterday/last-week, not current hour)
     "suffolk_footfall_lag_24h", "suffolk_footfall_lag_168h",
     "suffolk_footfall_roll_24h",
+    # Same-slot seasonal averages (4-week lookback, no same-day leakage)
+    "orders_count_same_slot_4w_avg",
+    "food_tickets_count_same_slot_4w_avg",
 ]
 
 # Full feature set (adds intra-day lags — usable for same-day nowcasting)
@@ -532,6 +558,208 @@ def predict_next_day(
 
 
 # ---------------------------------------------------------------------------
+# Asymmetric loss (penalise under-predictions 2× more)
+# ---------------------------------------------------------------------------
+
+def _asymmetric_obj(y_pred: np.ndarray, dtrain: xgb.DMatrix):
+    """
+    Custom XGBoost gradient/hessian for asymmetric squared loss.
+    Under-predictions (pred < true) receive 2× the penalty of over-predictions.
+
+    Loss:
+        2*(y_true - y_pred)^2  when y_pred < y_true  (under)
+        (y_true - y_pred)^2    otherwise              (over)
+
+    Gradient  dL/dy_pred:
+        Under: 4*(y_pred - y_true)   |  Hessian: 4
+        Over:  2*(y_pred - y_true)   |  Hessian: 2
+    """
+    y_true = dtrain.get_label()
+    residual = y_pred - y_true
+    is_under = residual < 0
+    grad = np.where(is_under, 4.0 * residual, 2.0 * residual)
+    hess = np.where(is_under, 4.0, 2.0)
+    return grad, hess
+
+
+# ---------------------------------------------------------------------------
+# Optuna hyperparameter tuning with walk-forward CV
+# ---------------------------------------------------------------------------
+
+def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str]):
+    """Factory: returns an Optuna objective closure for a specific shift+target."""
+
+    df_s = df_shift.dropna(subset=[target]).sort_values("timestamp_hour").reset_index(drop=True)
+    feat_avail = [c for c in feature_cols if c in df_s.columns]
+    X_all = df_s[feat_avail].fillna(0).values
+    y_all = df_s[target].values
+    n = len(df_s)
+
+    def objective(trial: optuna.Trial) -> float:
+        params = {
+            "max_depth":        trial.suggest_int("max_depth", 3, 8),
+            "learning_rate":    trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "num_boost_round":  trial.suggest_int("n_estimators", 100, 800),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "subsample":        trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "reg_alpha":        trial.suggest_float("reg_alpha", 0.0, 3.0),
+            "reg_lambda":       trial.suggest_float("reg_lambda", 0.0, 3.0),
+            "seed": 42,
+            "verbosity": 0,
+        }
+        n_rounds = params.pop("num_boost_round")
+
+        if n < 80:
+            return float("inf")
+
+        maes = []
+        # 3-fold walk-forward CV
+        for fold in range(3):
+            train_end = int(n * (fold + 1) / 4)
+            test_start = train_end
+            test_end   = int(n * (fold + 2) / 4)
+            if test_end > n or train_end < 30 or (test_end - test_start) < 10:
+                continue
+
+            X_tr, y_tr = X_all[:train_end], y_all[:train_end]
+            X_te, y_te = X_all[test_start:test_end], y_all[test_start:test_end]
+
+            dtrain = xgb.DMatrix(X_tr, label=y_tr)
+            dtest  = xgb.DMatrix(X_te, label=y_te)
+
+            bst = xgb.train(
+                params, dtrain,
+                num_boost_round=n_rounds,
+                obj=_asymmetric_obj,
+                verbose_eval=False,
+            )
+            preds = np.maximum(bst.predict(dtest), 0)
+            maes.append(mean_absolute_error(y_te, preds))
+
+        return float(np.mean(maes)) if maes else float("inf")
+
+    return objective, feat_avail, df_s, X_all, y_all
+
+
+def tune_and_train_shift_model(
+    df: pd.DataFrame,
+    target: str,
+    shift_name: str,
+    shift_mask_fn,
+    feature_cols: list[str],
+    n_trials: int = 50,
+) -> tuple[xgb.Booster | None, dict, list[str]]:
+    """
+    Run Optuna (n_trials) for one shift+target, train final model on full shift data.
+
+    Returns (booster, best_params, feat_avail) — booster is None if insufficient data.
+    """
+    hour_col = (
+        df["timestamp_hour"].dt.hour
+        if "timestamp_hour" in df.columns
+        else df["hour"]
+    )
+    mask = shift_mask_fn(hour_col)
+    df_shift = df[mask].copy()
+
+    if len(df_shift) < 80:
+        print(f"    [{shift_name}] Skipping — only {len(df_shift)} rows.")
+        return None, {}, []
+
+    obj_fn, feat_avail, df_s, X_all, y_all = _make_optuna_objective(
+        df_shift, target, feature_cols
+    )
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(obj_fn, n_trials=n_trials, show_progress_bar=False)
+    best = study.best_params.copy()
+    n_rounds = best.pop("n_estimators")
+
+    # Train final model on full shift data with best params
+    xgb_params = {
+        "max_depth":        best["max_depth"],
+        "learning_rate":    best["learning_rate"],
+        "min_child_weight": best["min_child_weight"],
+        "subsample":        best["subsample"],
+        "colsample_bytree": best["colsample_bytree"],
+        "reg_alpha":        best["reg_alpha"],
+        "reg_lambda":       best["reg_lambda"],
+        "seed": 42,
+        "verbosity": 0,
+    }
+    dtrain = xgb.DMatrix(X_all, label=y_all, feature_names=feat_avail)
+    bst = xgb.train(
+        xgb_params, dtrain,
+        num_boost_round=n_rounds,
+        obj=_asymmetric_obj,
+    )
+    return bst, study.best_params, feat_avail
+
+
+def train_shift_models(
+    df: pd.DataFrame,
+    target: str,
+    feature_cols: list[str],
+    global_model: xgb.XGBRegressor,
+    n_trials: int = 50,
+) -> None:
+    """
+    Train and save per-shift XGBoost models with Optuna-tuned asymmetric loss.
+    Prints before/after MAE per shift.
+    """
+    print(f"\n  --- Shift-specific models for {target} ---")
+
+    hour_col = df["timestamp_hour"].dt.hour
+    feat_avail_global = [c for c in feature_cols if c in df.columns]
+
+    for shift_name, mask_fn in SHIFT_SEGMENTS.items():
+        mask = mask_fn(hour_col)
+        df_shift = df[mask].dropna(subset=[target]).copy()
+
+        if len(df_shift) < 80:
+            print(f"    [{shift_name}] Insufficient data ({len(df_shift)} rows), skipping.")
+            continue
+
+        X_shift = df_shift[feat_avail_global].fillna(0)
+        y_shift = df_shift[target].values
+
+        # Before MAE — global model on this shift's data
+        before_preds = np.maximum(global_model.predict(X_shift), 0)
+        before_mae   = mean_absolute_error(y_shift, before_preds)
+
+        print(f"    [{shift_name}] {len(df_shift)} rows | Global MAE={before_mae:.2f} | tuning…")
+
+        bst, best_params, feat_used = tune_and_train_shift_model(
+            df, target, shift_name, mask_fn, feature_cols, n_trials=n_trials
+        )
+
+        if bst is None:
+            continue
+
+        # After MAE — shift model on same data
+        dshift = xgb.DMatrix(df_shift[feat_used].fillna(0).values, feature_names=feat_used)
+        after_preds = np.maximum(bst.predict(dshift), 0)
+        after_mae   = mean_absolute_error(y_shift, after_preds)
+
+        print(
+            f"    [{shift_name}] After MAE={after_mae:.2f}  "
+            f"(Δ={after_mae - before_mae:+.2f})"
+        )
+
+        # Save shift model
+        model_path = MODELS_DIR / f"xgb_{target}_{shift_name}.json"
+        bst.save_model(str(model_path))
+        print(f"    [{shift_name}] Saved → {model_path}")
+
+        # Save best params
+        params_path = MODELS_DIR / f"best_params_{target}_{shift_name}.json"
+        with open(params_path, "w") as fh:
+            json.dump({"best_params": best_params, "feat_avail": feat_used}, fh, indent=2)
+        print(f"    [{shift_name}] Params → {params_path}")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -591,6 +819,10 @@ def main():
         xgb_final.save_model(str(MODELS_DIR / f"xgb_{target}.json"))
         fi.to_csv(MODELS_DIR / f"feature_importance_{target}.csv", index=False)
         print(f"\n  Models saved to {MODELS_DIR}/")
+
+        # Train shift-specific models with Optuna asymmetric tuning
+        print(f"\n  Running Optuna shift-specific tuning (50 trials × 4 shifts)…")
+        train_shift_models(df, target, feature_cols, xgb_final, n_trials=50)
 
 if __name__ == "__main__":
     main()

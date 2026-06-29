@@ -18,6 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 from src.model import (
     BaselinePredictor, assign_shift_labels,
     label_from_thresholds, SAFE_FOR_NEXT_DAY, TARGETS,
+    get_hour_shift, SHIFT_SEGMENTS,
 )
 
 # ---------------------------------------------------------------------------
@@ -384,8 +385,55 @@ def load_models() -> dict:
         xm = xgb.XGBRegressor()
         xm.load_model(f"models/xgb_{target}.json")
         bl = joblib.load(f"models/baseline_{target}.pkl")
-        m[target] = {"xgb": xm, "baseline": bl}
+        m[target] = {"xgb": xm, "baseline": bl, "shifts": {}}
+
+        # Load shift-specific models (native Booster); fall back to global if absent
+        for shift_name in SHIFT_SEGMENTS:
+            path = Path(f"models/xgb_{target}_{shift_name}.json")
+            if path.exists():
+                try:
+                    bst = xgb.Booster()
+                    bst.load_model(str(path))
+                    m[target]["shifts"][shift_name] = bst
+                except Exception:
+                    pass  # silently ignore corrupt / incompatible files
+
     return m
+
+def _predict_with_shift_routing(
+    X: pd.DataFrame,
+    hours: np.ndarray,
+    shift_models: dict,
+    global_model: xgb.XGBRegressor,
+) -> np.ndarray:
+    """
+    Predict for every row in X. For each row, use the shift-specific Booster if
+    one exists for that hour's shift; otherwise fall back to the global XGBRegressor.
+    Returns a 1-D array of non-negative predictions.
+    """
+    preds = np.zeros(len(X))
+    feat_cols = list(X.columns)
+
+    if not shift_models:
+        return np.maximum(global_model.predict(X), 0)
+
+    # Group rows by shift to batch predict
+    handled = np.zeros(len(X), dtype=bool)
+    for shift_name, bst in shift_models.items():
+        mask_fn = SHIFT_SEGMENTS[shift_name]
+        mask = mask_fn(hours)
+        if not mask.any():
+            continue
+        dmat = xgb.DMatrix(X[mask].values, feature_names=feat_cols)
+        preds[mask] = np.maximum(bst.predict(dmat), 0)
+        handled |= mask
+
+    # Fall back to global model for any un-handled hours
+    if (~handled).any():
+        preds[~handled] = np.maximum(global_model.predict(X[~handled]), 0)
+
+    return preds
+
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_feature_importance() -> dict:
@@ -408,11 +456,16 @@ def forecast_for_date(df, models, date, overrides):
             day[col] = val
     feat = [c for c in SAFE_FOR_NEXT_DAY if c in day.columns]
     X = day[feat].fillna(0)
+    hours = day["timestamp_hour"].dt.hour.values
     result = day[["timestamp_hour"]].copy()
-    result["hour"] = day["timestamp_hour"].dt.hour
+    result["hour"] = hours
     for t in TARGETS:
-        result[f"{t}_xgb"]      = np.maximum(models[t]["xgb"].predict(X), 0).round(1)
-        result[f"{t}_baseline"] = np.maximum(models[t]["baseline"].predict(day, t), 0).round(1)
+        result[f"{t}_xgb"] = _predict_with_shift_routing(
+            X, hours, models[t].get("shifts", {}), models[t]["xgb"]
+        ).round(1)
+        result[f"{t}_baseline"] = np.maximum(
+            models[t]["baseline"].predict(day, t), 0
+        ).round(1)
     for col in overrides or {}:
         if col in day.columns:
             result[col] = day[col].values

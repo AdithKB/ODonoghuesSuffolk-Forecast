@@ -74,6 +74,10 @@ def add_lag_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
       Useful for within-shift momentum.
     - Timestamp-based (lag_24h, lag_48h, lag_168h, lag_336h): same clock hour
       on prior days/weeks. Useful for day-of-week and weekly seasonality.
+
+    Also adds:
+    - same_slot_4w_avg: mean of the same (hour, weekday) slot at 7, 14, 21, 28 days
+      prior. Handles NaN by averaging only available weeks.
     """
     s = df[target]
 
@@ -87,6 +91,20 @@ def add_lag_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
                          (168, "lag_168h"), (336, "lag_336h")]:
         lagged = _lag_by_timedelta(ts_series, pd.Timedelta(hours=hours), label)
         df[f"{target}_{label}"] = lagged.values
+
+    # Same-slot 4-week average: mean of weeks 1–4 lookback (NaN-safe)
+    col_name = f"{target}_same_slot_4w_avg"
+    if col_name not in df.columns:
+        week_lags = []
+        for weeks in [1, 2, 3, 4]:
+            lv = _lag_by_timedelta(
+                ts_series,
+                pd.Timedelta(hours=weeks * 168),
+                f"_tmp_{target}_{weeks}w",
+            )
+            week_lags.append(lv.values.astype(float))
+        stacked = np.vstack(week_lags).T  # (n_rows, 4)
+        df[col_name] = np.nanmean(stacked, axis=1)
 
     return df
 
