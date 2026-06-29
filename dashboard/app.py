@@ -695,20 +695,16 @@ def main():
         with col:
             render_shift_card(name, info)
 
-    # ── Chart ────────────────────────────────────────────────────────────────
+    # ── Today's Signals ──────────────────────────────────────────────────────
+    st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
+    render_signals_panel(forecast, forecast_date)
+
+    # ── Hourly Chart ─────────────────────────────────────────────────────────
     st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
     render_hourly_chart(forecast)
 
-    # ── Context Panels ───────────────────────────────────────────────────────
-    st.markdown('<div style="height:1.5rem;"></div>', unsafe_allow_html=True)
-    left, right = st.columns([1, 1])
-    with left:
-        render_signals_panel(forecast, forecast_date)
-    with right:
-        render_feature_importance_panel(fi)
-
     # ── Hourly table ─────────────────────────────────────────────────────────
-    st.markdown('<div style="height:2rem;"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
     with st.expander("View Full Hourly Data"):
         def _shift_label(h):
             if 12 <= h <= 14: return "Lunch"
@@ -757,6 +753,11 @@ def main():
         
         csv_out = out[["Time", "Shift", "Orders", "Food", "Baseline"]].to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv_out, file_name=f"odonoghues_{forecast_date.strftime('%Y-%m-%d')}.csv", mime="text/csv")
+
+    # ── Forecast Drivers (collapsed) ─────────────────────────────────────────
+    st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
+    with st.expander("Forecast Drivers"):
+        render_feature_importance_panel(fi)
 
 if __name__ == "__main__":
     main()
