@@ -797,25 +797,22 @@ def main():
         if "date_picker" not in st.session_state:
             st.session_state.date_picker = default_date
 
-        c_prev, c_mid, c_next = st.columns([1, 4, 1])
+        c_prev, c_today, c_next = st.columns(3)
         if c_prev.button("◀", key="btn_prev", use_container_width=True):
             st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
-        with c_mid:
-            d = st.session_state.get("date_picker", default_date)
-            st.markdown(
-                f"<div class='sb-date-display'>"
-                f"<span class='day-name'>{d.strftime('%A').upper()}</span>"
-                f"<span class='date-str'>{d.strftime('%-d %b %Y').upper()}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        if c_today.button("TODAY", key="btn_today", use_container_width=True):
+            st.session_state.date_picker = max(available[0], min(available[-1], today))
         if c_next.button("▶", key="btn_next", use_container_width=True):
             st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
 
-        _, c_today, _ = st.columns([1, 2, 1])
-        with c_today:
-            if st.button("TODAY", key="btn_today", use_container_width=True):
-                st.session_state.date_picker = max(available[0], min(available[-1], today))
+        d = st.session_state.get("date_picker", default_date)
+        st.markdown(
+            f"<div class='sb-date-display'>"
+            f"<span class='day-name'>{d.strftime('%A').upper()}</span>"
+            f"<span class='date-str'>{d.strftime('%-d %b %Y').upper()}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
         sel_date = st.date_input(
             "Forecast Date", key="date_picker",
