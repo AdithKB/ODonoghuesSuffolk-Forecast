@@ -191,7 +191,7 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 .table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 @media (max-width: 768px) {
-    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 1rem !important; }
+    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 4.5rem !important; }
     .hero-block { padding: 1rem; margin-bottom: 1rem; gap: 0.5rem; }
     .hero-date { font-size: 1.75rem; line-height: 1.1; }
     .hero-meta { font-size: 0.75rem; line-height: 1.4; }
