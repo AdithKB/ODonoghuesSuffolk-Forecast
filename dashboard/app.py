@@ -67,9 +67,18 @@ html, body, [data-testid="stApp"] {
 
 [data-testid="stSidebar"] { background-color: var(--surface) !important; border-right: 1px solid var(--border) !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
-[data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: none !important; }
+[data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: 1px solid var(--border) !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stToolbarActions"] { display: none !important; }
+[data-testid="stToolbar"] { position: relative !important; }
+[data-testid="stToolbar"]::after {
+    content: "O'Donoghues";
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    color: #FAFAFA; font-family: 'Inter', sans-serif;
+    font-size: 0.875rem; font-weight: 600; letter-spacing: 0.04em;
+    pointer-events: none;
+}
 
 
 .block-container {
@@ -476,6 +485,7 @@ def render_hourly_chart(forecast: pd.DataFrame):
     fig.update_layout(
         template="plotly_dark",
         height=340,
+        dragmode=False,
         margin=dict(l=0, r=0, t=10, b=30),
         legend=dict(
             orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5,
@@ -598,6 +608,7 @@ def render_feature_importance_panel(fi):
     ))
     fig.update_layout(
         template="plotly_dark", height=240,
+        dragmode=False,
         margin=dict(l=0, r=40, t=10, b=0),
         xaxis_title=None, yaxis_title=None,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
