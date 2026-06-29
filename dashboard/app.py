@@ -869,7 +869,6 @@ def main():
         special_event = st.toggle("Special event", value=False)
         major_sports  = st.toggle("Sports event",  value=False)
         cruise        = st.toggle("Cruise ship",   value=False)
-        st_pats       = st.toggle("St. Patrick's", value=False)
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
@@ -915,13 +914,17 @@ def main():
                 st.cache_data.clear()
                 st.rerun()
 
+    # St. Patrick's week is a fixed calendar event — auto-detect from the date
+    _fd = forecast_date.date() if hasattr(forecast_date, "date") else forecast_date
+    _st_pats_auto = int(_fd.month == 3 and 10 <= _fd.day <= 17)
+
     overrides = {
         "live_music_flag":         int(live_music),
         "is_live_music_window":    int(live_music),
         "special_event_flag":      int(special_event),
         "major_sports_event_flag": int(major_sports),
         "cruise_ship_flag":        int(cruise),
-        "st_patricks_week_flag":   int(st_pats),
+        "st_patricks_week_flag":   _st_pats_auto,
         "rain_mm": rain, "temp_c": temp,
     }
 
