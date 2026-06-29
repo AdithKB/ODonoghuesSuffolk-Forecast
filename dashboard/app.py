@@ -185,6 +185,26 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 .sig-pip.low     { background: var(--text-ter);  }
 .sig-group-hdr { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-ter); margin: 0.75rem 0 0.25rem 0; }
 .sig-group-hdr:first-child { margin-top: 0; }
+
+/* ── Responsive / Mobile ── */
+.table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+@media (max-width: 768px) {
+    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 1rem !important; }
+    .hero-block { padding: 1rem; margin-bottom: 1rem; gap: 0.5rem; }
+    .hero-date { font-size: 1.75rem; line-height: 1.1; }
+    .hero-meta { font-size: 0.75rem; line-height: 1.4; }
+    
+    .pressure-banner { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 0.75rem 1rem; margin-bottom: 1.5rem; }
+    
+    .shift-card { padding: 1rem; gap: 1rem; }
+    .sc-metrics { gap: 1rem; justify-content: space-between; }
+    .sc-metric-value { font-size: 1.25rem; }
+    
+    .panel-card { padding: 1rem; margin-bottom: 1rem; }
+    
+    .custom-table th, .custom-table td { padding: 0.5rem; font-size: 0.75rem; white-space: nowrap; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -455,9 +475,9 @@ def render_hourly_chart(forecast: pd.DataFrame):
     fig.update_layout(
         template="plotly_dark",
         height=340,
-        margin=dict(l=0, r=0, t=10, b=0),
+        margin=dict(l=0, r=0, t=10, b=30),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.05, x=0,
+            orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5,
             font=dict(size=10, color="#A1A1AA", family="Inter, sans-serif"),
             bgcolor="rgba(0,0,0,0)",
         ),
@@ -705,6 +725,7 @@ def main():
             )
         
         table_html = f"""
+        <div class="table-responsive">
         <table class="custom-table">
             <thead>
                 <tr>
@@ -719,6 +740,7 @@ def main():
                 {''.join(table_rows)}
             </tbody>
         </table>
+        </div>
         """
         st.markdown(table_html, unsafe_allow_html=True)
         
