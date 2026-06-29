@@ -88,8 +88,9 @@ html, body, [data-testid="stApp"] {
 }
 [data-testid="stSidebar"] .stToggle { padding: 0.12rem 0 !important; }
 [data-testid="stSidebar"] .stToggle p { font-size: 0.8rem !important; color: var(--text-sec) !important; }
-[data-testid="stSidebar"] .stHorizontalBlock { gap: 4px !important; flex-wrap: nowrap !important; }
-[data-testid="stSidebar"] .stHorizontalBlock > [data-testid="column"] { min-width: 0 !important; }
+[data-testid="stSidebar"] .stHorizontalBlock { gap: 4px !important; }
+[data-testid="stSidebar"] [data-testid="stTickBarMin"],
+[data-testid="stSidebar"] [data-testid="stTickBarMax"] { display: none !important; }
 
 /* Date input — clean monospace field */
 [data-testid="stSidebar"] .stDateInput > label { display: none !important; }
