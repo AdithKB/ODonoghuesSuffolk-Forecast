@@ -1,0 +1,35 @@
+name: Hourly data refresh
+
+on:
+  schedule:
+    - cron: '30 * * * *'   # every hour at :30 (avoids on-the-hour usage peaks)
+  workflow_dispatch:        # manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh data
+        run: python refresh_data.py
+
+      - name: Commit updated data files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: hourly data refresh [skip ci]"
+          git push

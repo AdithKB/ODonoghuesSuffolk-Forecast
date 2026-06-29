@@ -14,6 +14,7 @@ import joblib
 import xgboost as xgb
 import streamlit as st
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 from src.model import (
     BaselinePredictor, assign_shift_labels,
     label_from_thresholds, SAFE_FOR_NEXT_DAY, TARGETS,
@@ -370,7 +371,7 @@ HUMAN_LABELS = {
 # ---------------------------------------------------------------------------
 # Loaders (cached)
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner="Loading data...")
+@st.cache_data(show_spinner="Loading data...", ttl=3600)
 def load_features() -> pd.DataFrame:
     df = pd.read_parquet("data/processed/features.parquet")
     df["timestamp_hour"] = pd.to_datetime(df["timestamp_hour"])
@@ -386,7 +387,7 @@ def load_models() -> dict:
         m[target] = {"xgb": xm, "baseline": bl}
     return m
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def load_feature_importance() -> dict:
     fi = {}
     for target in TARGETS:
@@ -810,6 +811,9 @@ def render_feature_importance_panel(fi):
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    # Silent rerun every 60 min — picks up fresh data after GH Actions refresh
+    st_autorefresh(interval=60 * 60 * 1000, key="hourly_autorefresh")
+
     df     = load_features()
     models = load_models()
     fi     = load_feature_importance()
