@@ -129,12 +129,24 @@ html, body, [data-testid="stApp"] {
 }
 .sb-date-display .day-name { font-size: 0.55rem; color: var(--text-ter); letter-spacing: 0.14em; display: block; margin-bottom: 2px; }
 .sb-date-display .date-str { font-size: 0.85rem; letter-spacing: 0.06em; }
-.sb-slider-row {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 2px; margin-top: 0.6rem;
+.sb-slider-label { font-size: 0.75rem; color: var(--text-sec); font-family: var(--sans); line-height: 2; }
+
+/* Number input in weather row: hide steppers, right-aligned monospace value */
+[data-testid="stSidebar"] .stNumberInput button { display: none !important; }
+[data-testid="stSidebar"] .stNumberInput [data-baseweb="input"] {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid var(--border) !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
 }
-.sb-slider-label { font-size: 0.75rem; color: var(--text-sec); font-family: var(--sans); }
-.sb-slider-val { font-size: 0.7rem; color: var(--text-pri); font-family: var(--mono); letter-spacing: 0.04em; }
+[data-testid="stSidebar"] .stNumberInput input {
+    font-family: var(--mono) !important; font-size: 0.78rem !important;
+    color: var(--text-pri) !important; text-align: right !important;
+    padding: 2px 4px !important; background: transparent !important;
+    cursor: text !important;
+}
+[data-testid="stSidebar"] .stNumberInput { margin-top: 0 !important; }
 [data-testid="stHeader"] { background-color: var(--bg) !important; border-bottom: 1px solid var(--border) !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stToolbarActions"] { display: none !important; }
@@ -823,14 +835,7 @@ def main():
         if "date_picker" not in st.session_state:
             st.session_state.date_picker = default_date
 
-        c_prev, c_next = st.columns(2)
-        if c_prev.button("◀  PREV", key="btn_prev", use_container_width=True):
-            st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
-        if c_next.button("NEXT  ▶", key="btn_next", use_container_width=True):
-            st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
-        if st.button("TODAY", key="btn_today", use_container_width=True):
-            st.session_state.date_picker = max(available[0], min(available[-1], today))
-
+        # Date display first — tap it to open the native calendar
         d = st.session_state.get("date_picker", default_date)
         st.markdown(
             f"<div class='sb-date-display'>"
@@ -839,13 +844,22 @@ def main():
             f"</div>",
             unsafe_allow_html=True,
         )
-
+        # Invisible overlay: tapping the date display triggers this picker
         sel_date = st.date_input(
             "Forecast Date", key="date_picker",
             min_value=available[0], max_value=available[-1],
             label_visibility="collapsed",
         )
         forecast_date = pd.Timestamp(sel_date)
+
+        # Navigation below the date
+        c_prev, c_next = st.columns(2)
+        if c_prev.button("◀  PREV", key="btn_prev", use_container_width=True):
+            st.session_state.date_picker = max(available[0], st.session_state.date_picker - datetime.timedelta(days=1))
+        if c_next.button("NEXT  ▶", key="btn_next", use_container_width=True):
+            st.session_state.date_picker = min(available[-1], st.session_state.date_picker + datetime.timedelta(days=1))
+        if st.button("TODAY", key="btn_today", use_container_width=True):
+            st.session_state.date_picker = max(available[0], min(available[-1], today))
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
@@ -861,26 +875,35 @@ def main():
 
         # — WEATHER —
         st.markdown("<p class='sb-section-label'>Weather</p>", unsafe_allow_html=True)
-        if "rain_val" not in st.session_state:
-            st.session_state.rain_val = 1.0
-        if "temp_val" not in st.session_state:
-            st.session_state.temp_val = 12.0
-        st.markdown(
-            f"<div class='sb-slider-row'>"
-            f"<span class='sb-slider-label'>Rain</span>"
-            f"<span class='sb-slider-val'>{st.session_state.rain_val:.1f} mm</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        rain = st.slider("Rain", 0.0, 20.0, 1.0, 0.5, key="rain_val", label_visibility="collapsed")
-        st.markdown(
-            f"<div class='sb-slider-row'>"
-            f"<span class='sb-slider-label'>Temperature</span>"
-            f"<span class='sb-slider-val'>{st.session_state.temp_val:.1f} °C</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        temp = st.slider("Temperature", 0.0, 25.0, 12.0, 0.5, key="temp_val", label_visibility="collapsed")
+
+        # Callbacks keep slider and number_input in sync
+        def _sync_rain_input():  st.session_state.rain_slider = st.session_state.rain_input
+        def _sync_rain_slider(): st.session_state.rain_input  = st.session_state.rain_slider
+        def _sync_temp_input():  st.session_state.temp_slider = st.session_state.temp_input
+        def _sync_temp_slider(): st.session_state.temp_input  = st.session_state.temp_slider
+
+        for k, v in [("rain_slider", 1.0), ("rain_input", 1.0),
+                     ("temp_slider", 12.0), ("temp_input", 12.0)]:
+            if k not in st.session_state:
+                st.session_state[k] = v
+
+        rl, rv = st.columns([3, 2])
+        rl.markdown("<span class='sb-slider-label'>Rain</span>", unsafe_allow_html=True)
+        with rv:
+            st.number_input("rain_input_lbl", 0.0, 20.0, step=0.5, format="%.1f",
+                            key="rain_input", label_visibility="collapsed",
+                            on_change=_sync_rain_input)
+        rain = st.slider("Rain", 0.0, 20.0, step=0.5, key="rain_slider",
+                         label_visibility="collapsed", on_change=_sync_rain_slider)
+
+        tl, tv = st.columns([3, 2])
+        tl.markdown("<span class='sb-slider-label'>Temp</span>", unsafe_allow_html=True)
+        with tv:
+            st.number_input("temp_input_lbl", 0.0, 25.0, step=0.5, format="%.1f",
+                            key="temp_input", label_visibility="collapsed",
+                            on_change=_sync_temp_input)
+        temp = st.slider("Temperature", 0.0, 25.0, step=0.5, key="temp_slider",
+                         label_visibility="collapsed", on_change=_sync_temp_slider)
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
