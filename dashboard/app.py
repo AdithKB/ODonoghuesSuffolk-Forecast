@@ -708,7 +708,6 @@ def render_signals_panel(forecast, forecast_date):
         f'</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
-    st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 def render_feature_importance_panel(fi):
     if "orders_count" not in fi:
