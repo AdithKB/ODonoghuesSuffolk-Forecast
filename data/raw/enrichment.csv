@@ -1278,7 +1278,7 @@ date,airport_arrivals,airport_arrivals_lag1,cruise_ship_flag,ships_in_port_count
 2026-06-30,104600,104600,0,0,0,0,0,0,1,1,2.0,Lily Allen | Empire of the Sun — Fairview Park,1,0,1,5,0,0,0,1,0,0,0,0
 2026-07-01,104600,104600,0,0,0,0,0,0,1,1,2.0,Lily Allen,1,0,1,-4,0,0,0,1,0,0,0,0
 2026-07-02,104600,104600,0,0,0,0,0,0,0,0,0.0,,1,0,1,-3,0,0,0,1,0,0,0,0
-2026-07-03,104600,104600,0,0,0,0,0,0,1,1,2.0,Wolfe Tones | Dun Laoghaire Summerfest,1,0,1,-2,0,0,0,1,0,0,0,0
+2026-07-03,104600,104600,1,1,2500,0,0,0,1,1,2.0,Wolfe Tones | Dun Laoghaire Summerfest,1,0,1,-2,0,0,0,1,0,0,0,0
 2026-07-04,104600,104600,0,0,0,0,1,1,1,1,3.0,Take That / OneRepublic | GAA Hurling All-Ireland SF (Galway v Cork) | Wolfe Tones | Dun Laoghaire Summerfest,1,0,1,-1,0,0,0,1,0,0,0,1
 2026-07-05,104600,104600,0,0,0,0,0,1,0,1,3.0,GAA Hurling All-Ireland SF (Limerick v Clare) | Dun Laoghaire Summerfest,1,0,1,0,0,0,0,1,0,0,0,1
 2026-07-06,104600,104600,1,1,2500,0,0,0,0,1,1.0,Dun Laoghaire Summerfest,1,0,0,1,0,0,0,1,0,0,0,0
