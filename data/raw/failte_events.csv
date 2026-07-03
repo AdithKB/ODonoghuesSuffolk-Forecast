@@ -1,5 +1,4 @@
 date,failte_event_count,failte_free_event_count,failte_festival_count
-2026-07-02,18,2,0
 2026-07-03,23,1,0
 2026-07-04,17,2,0
 2026-07-05,18,2,1
@@ -76,7 +75,7 @@ date,failte_event_count,failte_free_event_count,failte_festival_count
 2026-09-14,1,0,0
 2026-09-15,3,0,0
 2026-09-16,3,0,0
-2026-09-17,2,0,0
+2026-09-17,3,1,0
 2026-09-18,2,0,0
 2026-09-19,3,0,0
 2026-09-20,3,0,0
@@ -106,7 +105,7 @@ date,failte_event_count,failte_free_event_count,failte_festival_count
 2026-10-14,3,1,1
 2026-10-15,3,1,1
 2026-10-16,3,1,1
-2026-10-17,4,1,1
+2026-10-17,5,2,1
 2026-10-18,4,1,1
 2026-10-19,2,0,0
 2026-10-20,1,0,0
