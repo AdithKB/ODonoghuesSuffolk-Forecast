@@ -196,13 +196,23 @@ div[data-baseweb="slider"] div[role="slider"] { background-color: var(--text-pri
 .briefing-bucket-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; color: var(--text-ter); text-transform: uppercase; font-family: var(--sans); }
 .briefing-bucket-text { font-size: 0.82rem; color: var(--text-sec); line-height: 1.55; font-family: var(--sans); }
 
-/* ── Forecast Drivers List ── */
-.driver-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-dim); }
-.driver-row:last-child { border-bottom: none; }
-.driver-label { flex: 1 1 0; font-size: 0.8rem; color: var(--text-sec); min-width: 0; }
-.driver-bar-wrap { flex: 0 0 80px; height: 3px; background: var(--surface); border-radius: 2px; overflow: hidden; }
-.driver-bar { height: 100%; background: #52525B; border-radius: 2px; }
-.driver-pct { flex: 0 0 3.5rem; text-align: right; font-size: 0.75rem; color: var(--text-pri); font-family: var(--mono); }
+/* ── Today's Signals Panel ── */
+.ts-section-label { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em; color: var(--text-ter); text-transform: uppercase; margin: 1rem 0 0.5rem; }
+.ts-section-label:first-child { margin-top: 0; }
+.ts-metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 0.25rem; }
+.ts-metric { background: var(--bg); border: 1px solid var(--border-dim); border-radius: 4px; padding: 0.55rem 0.7rem; }
+.ts-metric-label { font-size: 0.6rem; color: var(--text-ter); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.3rem; }
+.ts-metric-value { font-family: var(--mono); font-size: 1.05rem; color: var(--text-pri); font-weight: 500; line-height: 1; }
+.ts-metric-unit { font-size: 0.65rem; color: var(--text-ter); margin-left: 2px; }
+.ts-row { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--border-dim); font-size: 0.8rem; }
+.ts-row:last-child { border-bottom: none; }
+.ts-row-label { color: var(--text-sec); }
+.ts-row-value { font-family: var(--mono); color: var(--text-pri); }
+.ts-row-value.up   { color: var(--c-busy); }
+.ts-row-value.down { color: var(--text-ter); }
+.ts-pills-wrap { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
+.ts-pill { font-size: 0.67rem; font-weight: 600; letter-spacing: 0.05em; padding: 0.22rem 0.55rem; border-radius: 3px; border: 1px solid var(--c-busy); color: var(--c-busy); background: var(--bg-busy); }
+.ts-none { font-size: 0.8rem; color: var(--text-ter); }
 
 /* ── Custom HTML Table ── */
 .custom-table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 1rem; }
@@ -434,15 +444,6 @@ def _predict_with_shift_routing(
 
     return preds
 
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_feature_importance() -> dict:
-    fi = {}
-    for target in TARGETS:
-        p = Path(f"models/feature_importance_{target}.csv")
-        if p.exists():
-            fi[target] = pd.read_csv(p)
-    return fi
 
 # ---------------------------------------------------------------------------
 # Forecast helpers
@@ -838,27 +839,106 @@ def render_signals_panel(forecast, forecast_date):
     )
     st.markdown(html, unsafe_allow_html=True)
 
-def render_feature_importance_panel(fi):
-    if "orders_count" not in fi:
-        st.markdown('<div class="panel-card"><div class="panel-title">Forecast Drivers</div><div style="color:var(--text-sec);font-size:0.85rem;">No data.</div></div>', unsafe_allow_html=True)
+def render_today_signals(df_day: pd.DataFrame, overrides: dict) -> None:
+    if df_day.empty:
+        st.markdown('<div class="panel-card"><div class="panel-title">Today\'s Signals</div><div class="ts-none">No data for this date.</div></div>', unsafe_allow_html=True)
         return
 
-    df = fi["orders_count"].head(7).copy()
-    df["label"] = df["feature"].map(HUMAN_LABELS).fillna(df["feature"].str.replace("_", " ").str.title())
-    df = df.sort_values("importance_pct", ascending=False)
-    max_pct = df["importance_pct"].max() or 1
+    day = df_day.copy()
+    for col, val in (overrides or {}).items():
+        if col in day.columns:
+            day[col] = val
 
-    rows = ""
-    for _, row in df.iterrows():
-        bar_w = int(row["importance_pct"] / max_pct * 100)
-        rows += (
-            f'<div class="driver-row">'
-            f'<span class="driver-label">{row["label"]}</span>'
-            f'<div class="driver-bar-wrap"><div class="driver-bar" style="width:{bar_w}%"></div></div>'
-            f'<span class="driver-pct">{row["importance_pct"]:.1f}%</span>'
-            f'</div>'
-        )
-    st.markdown(f'<div class="panel-card"><div class="panel-title">Forecast Drivers</div>{rows}</div>', unsafe_allow_html=True)
+    def _flag(col):
+        return bool(day[col].max()) if col in day.columns else False
+
+    def _svc_mean(col, default=0.0):
+        svc = day[day["timestamp_hour"].dt.hour.between(12, 22)]
+        src = svc if not svc.empty else day
+        return float(src[col].mean()) if col in src.columns and src[col].notna().any() else default
+
+    def _mean(col, default=0.0):
+        return float(day[col].mean()) if col in day.columns and day[col].notna().any() else default
+
+    # --- Demand Anchor ---
+    slot_4w   = _svc_mean("orders_count_same_slot_4w_avg")
+    last_week = _svc_mean("orders_count_lag_168h")
+    anchor_html = (
+        f'<div class="ts-metric-grid">'
+        f'<div class="ts-metric"><div class="ts-metric-label">4-week slot avg</div>'
+        f'<div class="ts-metric-value">{slot_4w:.0f}<span class="ts-metric-unit">orders</span></div></div>'
+        f'<div class="ts-metric"><div class="ts-metric-label">Last week same time</div>'
+        f'<div class="ts-metric-value">{last_week:.0f}<span class="ts-metric-unit">orders</span></div></div>'
+        f'</div>'
+    )
+
+    # --- External Conditions ---
+    airport_z = _mean("airport_arrivals_zscore")
+    footfall  = _mean("suffolk_footfall_roll_24h")
+    rain      = float(overrides.get("rain_mm", _mean("rain_mm", 1.0)))
+    temp      = float(overrides.get("temp_c",  _mean("temp_c",  12.0)))
+
+    if airport_z > 0.75:
+        ap_val = f'<span class="ts-row-value up">▲ above avg (+{airport_z:.1f}σ)</span>'
+    elif airport_z < -0.75:
+        ap_val = f'<span class="ts-row-value down">▼ below avg ({airport_z:.1f}σ)</span>'
+    else:
+        ap_val = f'<span class="ts-row-value">Near average ({airport_z:+.1f}σ)</span>'
+
+    if rain == 0:
+        rain_str = "Dry"
+    elif rain < 2:
+        rain_str = f"{rain:.1f} mm — light"
+    elif rain < 7:
+        rain_str = f"{rain:.1f} mm — moderate"
+    else:
+        rain_str = f"{rain:.1f} mm — heavy"
+
+    ff_str = f"{footfall:,.0f}" if footfall > 0 else "—"
+
+    conditions_html = (
+        f'<div class="ts-row"><span class="ts-row-label">Airport arrivals</span>{ap_val}</div>'
+        f'<div class="ts-row"><span class="ts-row-label">Suffolk St footfall</span><span class="ts-row-value">{ff_str}</span></div>'
+        f'<div class="ts-row"><span class="ts-row-label">Rain</span><span class="ts-row-value">{rain_str}</span></div>'
+        f'<div class="ts-row"><span class="ts-row-label">Temperature</span><span class="ts-row-value">{temp:.0f} °C</span></div>'
+    )
+
+    # --- Active Flags (only show what's on today) ---
+    FLAG_COLS = [
+        ("is_live_music_window",    "Live music"),
+        ("major_sports_event_flag", "Major sports"),
+        ("aviva_event_flag",        "Aviva match"),
+        ("croke_park_event_flag",   "Croke Park"),
+        ("special_event_flag",      "Private event"),
+        ("cruise_ship_flag",        "Cruise ship"),
+        ("bank_holiday_flag",       "Bank holiday"),
+        ("school_holiday_flag",     "School holidays"),
+        ("payday_period_flag",      "Payday week"),
+        ("st_patricks_week_flag",   "St. Patrick's week"),
+        ("bloomsday_flag",          "Bloomsday"),
+        ("summer_tourism_flag",     "Summer tourism"),
+        ("christmas_market_flag",   "Christmas market"),
+        ("new_years_eve_flag",      "New Year's Eve"),
+        ("college_term_flag",       "TCD term time"),
+        ("is_friday_saturday",      "Fri / Sat"),
+        ("is_weekend",              "Weekend"),
+    ]
+    active = [label for col, label in FLAG_COLS if _flag(col)]
+    pills_html = (
+        "".join(f'<span class="ts-pill">{p}</span>' for p in active)
+        if active else '<span class="ts-none">No active event flags today.</span>'
+    )
+
+    html = (
+        f'<div class="panel-card">'
+        f'<div class="panel-title">Today\'s Signals</div>'
+        f'<div class="ts-section-label">Demand Anchor</div>{anchor_html}'
+        f'<div class="ts-section-label">Conditions</div>{conditions_html}'
+        f'<div class="ts-section-label">Active Today</div>'
+        f'<div class="ts-pills-wrap">{pills_html}</div>'
+        f'</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -869,7 +949,6 @@ def main():
 
     df     = load_features()
     models = load_models()
-    fi     = load_feature_importance()
 
     available    = sorted(df["timestamp_hour"].dt.date.unique())
     day_counts   = df.groupby(df["timestamp_hour"].dt.date)["timestamp_hour"].count()
@@ -1091,10 +1170,11 @@ def main():
         csv_out = out[["Time", "Shift", "Orders", "Food", "Baseline"]].to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv_out, file_name=f"odonoghues_{forecast_date.strftime('%Y-%m-%d')}.csv", mime="text/csv")
 
-    # ── Forecast Drivers (collapsed) ─────────────────────────────────────────
+    # ── Today's Signals (collapsed) ──────────────────────────────────────────
     st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
-    with st.expander("Forecast Drivers"):
-        render_feature_importance_panel(fi)
+    df_day = df[df["timestamp_hour"].dt.date == forecast_date.date()].copy()
+    with st.expander("Today's Signals"):
+        render_today_signals(df_day, overrides)
 
 if __name__ == "__main__":
     main()
