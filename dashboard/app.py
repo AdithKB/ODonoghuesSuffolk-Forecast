@@ -20,6 +20,7 @@ from src.model import (
     label_from_thresholds, SAFE_FOR_NEXT_DAY, TARGETS,
     get_hour_shift, SHIFT_SEGMENTS,
 )
+from src.conformal import compute_hourly_quantiles, apply_intervals
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -385,6 +386,13 @@ HUMAN_LABELS = {
 # ---------------------------------------------------------------------------
 # Loaders (cached)
 # ---------------------------------------------------------------------------
+@st.cache_resource
+def load_conformal_quantiles() -> dict:
+    return {
+        target: compute_hourly_quantiles(target)
+        for target in TARGETS
+    }
+
 @st.cache_data(show_spinner="Loading data...", ttl=3600)
 def load_features() -> pd.DataFrame:
     df = pd.read_parquet("data/processed/features.parquet")
@@ -604,6 +612,20 @@ def render_hourly_chart(forecast: pd.DataFrame):
             annotation_font_size=8, annotation_font_color="#3F3F46",
             annotation_font_family="Inter, sans-serif",
         )
+
+    # 80% conformal band — drawn before bars so bars sit on top
+    if "orders_ci_lo" in forecast.columns and "orders_ci_hi" in forecast.columns:
+        fig.add_trace(go.Scatter(
+            x=hours_str, y=forecast["orders_ci_hi"].tolist(),
+            mode="lines", line=dict(width=0),
+            showlegend=False, hoverinfo="skip",
+        ))
+        fig.add_trace(go.Scatter(
+            x=hours_str, y=forecast["orders_ci_lo"].tolist(),
+            mode="lines", line=dict(width=0),
+            fill="tonexty", fillcolor="rgba(59,130,246,0.10)",
+            name="80% band", showlegend=True, hoverinfo="skip",
+        ))
 
     fig.add_trace(go.Bar(
         x=hours_str, y=forecast["orders_count_xgb"],
@@ -983,6 +1005,7 @@ def main():
 
     df     = load_features()
     models = load_models()
+    ci_quantiles = load_conformal_quantiles()
 
     available    = sorted(df["timestamp_hour"].dt.date.unique())
     day_counts   = df.groupby(df["timestamp_hour"].dt.date)["timestamp_hour"].count()
@@ -1149,6 +1172,7 @@ def main():
     }
 
     forecast = forecast_for_date(df, models, forecast_date, overrides)
+    forecast = apply_intervals(forecast, ci_quantiles.get("orders_count", {}))
     if forecast.empty:
         st.warning("No data for this date.")
         return
