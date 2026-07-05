@@ -347,6 +347,9 @@ SHIFT_HOURS = {
 HUMAN_LABELS = {
     "st_patricks_week_flag":       "St. Patrick's Festival week",
     "major_sports_event_flag":     "Major sports event",
+    "tv_sports_flag":              "TV sports fixture",
+    "tv_sports_intensity":         "TV sports intensity",
+    "is_ireland_match_window":     "Ireland match",
     "aviva_event_flag":            "Aviva Stadium event",
     "croke_park_event_flag":       "Croke Park event",
     "nearby_venue_event_flag":     "Nearby venue event",
@@ -940,6 +943,21 @@ def render_today_signals(df_day: pd.DataFrame, overrides: dict, df_full: pd.Data
         ("is_weekend",              "Weekend"),
     ]
     active = [label for col, label in FLAG_COLS if _flag(col)]
+
+    # TV sports: show named match label instead of generic "Major sports" if available
+    _tv_flag_on = bool(overrides.get("tv_sports_flag", _flag("tv_sports_flag")))
+    _tv_match_label = ""
+    if "tv_sports_match_label" in day.columns:
+        _label_vals = day[day["tv_sports_match_label"] != ""]["tv_sports_match_label"]
+        if not _label_vals.empty:
+            _tv_match_label = _label_vals.iloc[0]
+    if _tv_flag_on and _tv_match_label:
+        # Replace generic "Major sports" pill with the specific match label
+        if "Major sports" in active:
+            active = [_tv_match_label if x == "Major sports" else x for x in active]
+        else:
+            active.append(_tv_match_label)
+
     pills_html = (
         "".join(f'<span class="ts-pill">{p}</span>' for p in active)
         if active else '<span class="ts-none">No active event flags today.</span>'
@@ -1028,8 +1046,25 @@ def main():
         st.markdown("<p class='sb-section-label'>Overrides</p>", unsafe_allow_html=True)
         live_music    = st.toggle("Live music",    value=True)
         special_event = st.toggle("Special event", value=False)
-        major_sports  = st.toggle("Sports event",  value=False)
         cruise        = st.toggle("Cruise ship",   value=False)
+
+        # Smart auto-detection for TV sports: check features data for selected date
+        _sports_day = df[df["timestamp_hour"].dt.date == forecast_date.date()]
+        _tv_flag_auto    = bool(_sports_day["tv_sports_flag"].max() > 0) if "tv_sports_flag" in _sports_day.columns else False
+        _tv_intensity_auto = int(_sports_day["tv_sports_intensity"].max()) if "tv_sports_intensity" in _sports_day.columns else 0
+        _tv_label_auto = ""
+        if "tv_sports_match_label" in _sports_day.columns:
+            _labels = _sports_day[_sports_day["tv_sports_match_label"] != ""]["tv_sports_match_label"]
+            if not _labels.empty:
+                _tv_label_auto = _labels.iloc[0]
+
+        _sports_default = _tv_flag_auto or (_tv_intensity_auto > 0)
+        if _sports_default and _tv_label_auto:
+            st.markdown(
+                f"<div style='font-size:0.65rem;color:#A1A1AA;margin-bottom:0.2rem;'>Auto: {_tv_label_auto}</div>",
+                unsafe_allow_html=True,
+            )
+        major_sports = st.toggle("Sports event", value=_sports_default)
 
         st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
 
@@ -1106,6 +1141,11 @@ def main():
         "cruise_ship_flag":        int(cruise),
         "st_patricks_week_flag":   _st_pats_auto,
         "rain_mm": rain, "temp_c": temp,
+        # TV sports overrides — when user toggles sports on, apply auto-detected intensity;
+        # when toggled off, zero out the signal
+        "tv_sports_flag":          int(major_sports),
+        "tv_sports_intensity":     _tv_intensity_auto if major_sports else 0,
+        "is_ireland_match_window": int(major_sports and ("Ireland" in _tv_label_auto or "ireland" in _tv_label_auto.lower())),
     }
 
     forecast = forecast_for_date(df, models, forecast_date, overrides)

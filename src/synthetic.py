@@ -113,14 +113,28 @@ def _event_mult(row):
         mult *= 1.10
     if row.get("special_event_flag"):
         mult *= 1.25
-        
+
     # Extra multipliers from failte events
     failte_count = row.get("failte_event_count", 0)
     if failte_count > 10:
         mult *= 1.15
     elif failte_count > 3:
         mult *= 1.05
-        
+
+    # TV sports multipliers (from fetch_sports.py fixture data)
+    # Applied over a ±2h window around kickoff (synthetic data uses kickoff hour)
+    tv_intensity = int(row.get("tv_sports_intensity", 0))
+    if tv_intensity == 1:
+        mult *= 1.15
+    elif tv_intensity == 2:
+        mult *= 1.35
+    elif tv_intensity >= 3:
+        mult *= 1.55
+
+    # Ireland match — additional boost on top of intensity multiplier
+    if row.get("is_ireland_match_window"):
+        mult *= 1.20
+
     return mult
 
 def _footfall_mult(footfall_count):
@@ -282,6 +296,37 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
 
     # Load real data if available
     real_wx, real_enrich, real_ff, real_failte = None, None, None, None
+    real_sports_lookup: dict = {}  # dt -> (tv_sports_intensity, is_ireland_match)
+
+    # Load sports fixtures and build a per-hour lookup (±2h window around kickoff)
+    _sports_frames = []
+    for sp in ["data/raw/sports_fixtures.csv", "data/raw/six_nations_fixtures.csv"]:
+        if Path(sp).exists():
+            try:
+                _sports_frames.append(pd.read_csv(sp))
+            except Exception:
+                pass
+    if _sports_frames:
+        _sf = pd.concat(_sports_frames, ignore_index=True)
+        _sf["kickoff_dt"] = pd.to_datetime(
+            _sf["date"].astype(str) + " " + _sf["kickoff_local"].astype(str),
+            errors="coerce",
+        )
+        _sf = _sf.dropna(subset=["kickoff_dt"])
+        _sf["intensity"] = pd.to_numeric(_sf["intensity"], errors="coerce").fillna(0).astype(int)
+        _sf["is_ireland_match"] = _sf["is_ireland_match"].astype(bool)
+        # For each kickoff, mark ±2h around it
+        _WINDOW = 2
+        for _, _r in _sf.iterrows():
+            for _dh in range(-_WINDOW, _WINDOW + 1):
+                _slot = _r["kickoff_dt"] + timedelta(hours=_dh)
+                _slot_key = _slot.replace(minute=0, second=0, microsecond=0)
+                _prev = real_sports_lookup.get(_slot_key, (0, False))
+                real_sports_lookup[_slot_key] = (
+                    max(_prev[0], int(_r["intensity"])),
+                    bool(_prev[1] or _r["is_ireland_match"]),
+                )
+
     if Path("data/raw/weather_hourly.csv").exists():
         real_wx = pd.read_csv("data/raw/weather_hourly.csv")
         real_wx["timestamp_hour"] = pd.to_datetime(real_wx["timestamp_hour"])
@@ -363,6 +408,10 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
                 f_daily = real_failte.loc[date]
                 failte_count = int(f_daily.get("failte_event_count", 0))
 
+            # Look up TV sports signal for this hour
+            _dt_key = dt.replace(minute=0, second=0, microsecond=0)
+            _tv_intensity, _tv_ireland = real_sports_lookup.get(_dt_key, (0, False))
+
             ctx = {
                 "st_patricks_week_flag": is_st_pat,
                 "city_event_flag": is_city_ev,
@@ -371,6 +420,8 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
                 "cruise_ship_flag": c_ship_flag,
                 "special_event_flag": is_special,
                 "failte_event_count": failte_count,
+                "tv_sports_intensity": _tv_intensity,
+                "is_ireland_match_window": _tv_ireland,
             }
 
             base = BASE_ORDERS.get(actual_hour, 10)

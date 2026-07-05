@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_depth": 6,
-    "learning_rate": 0.018011979307770994,
-    "n_estimators": 632,
-    "min_child_weight": 9,
-    "subsample": 0.7382788630032784,
-    "colsample_bytree": 0.617769054173474,
-    "reg_alpha": 2.864907432401522,
-    "reg_lambda": 2.998742833017763
+    "max_depth": 4,
+    "learning_rate": 0.04740947625383839,
+    "n_estimators": 643,
+    "min_child_weight": 8,
+    "subsample": 0.6902950859947032,
+    "colsample_bytree": 0.6808372336913421,
+    "reg_alpha": 0.9627531538486578,
+    "reg_lambda": 1.4016556125877002
   },
   "feat_avail": [
     "orders_count_lag_24h",
@@ -83,6 +83,10 @@
     "suffolk_footfall_lag_168h",
     "suffolk_footfall_roll_24h",
     "orders_count_same_slot_4w_avg",
-    "food_tickets_count_same_slot_4w_avg"
+    "food_tickets_count_same_slot_4w_avg",
+    "tv_sports_flag",
+    "tv_sports_intensity",
+    "match_kickoff_proximity",
+    "is_ireland_match_window"
   ]
 }

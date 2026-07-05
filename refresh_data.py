@@ -35,6 +35,13 @@ def main():
 
     t0 = time.time()
 
+    # Load .env so FOOTBALL_DATA_API_KEY is available for fetch_sports
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     # 1. Weather + enrichment (includes airport, cruise, events, holidays)
     step("1/3  Fetching weather, airport, cruise, events…")
     from src.fetch_public_data import build_enrichment_table, build_hourly_weather_table
@@ -49,6 +56,29 @@ def main():
     print(f"     Enrichment table: {enrich.shape[0]} rows × {enrich.shape[1]} cols")
     enrich.to_csv(ROOT / "data/raw/enrichment.csv", index=False)
     print("     Saved → data/raw/enrichment.csv")
+
+    # 1b. Sports fixtures
+    step("1b/3  Fetching sports fixtures (football-data.org + Six Nations static)…")
+    try:
+        from src.fetch_sports import fetch_sports_fixtures, build_six_nations_csv
+        from datetime import date as _date, timedelta as _timedelta
+        sn = build_six_nations_csv(out_path=ROOT / "data/raw/six_nations_fixtures.csv")
+        print(f"     Six Nations: {len(sn)} fixtures saved")
+        sports_end = (_date.today() + _timedelta(days=90)).strftime("%Y-%m-%d")
+        fixtures = fetch_sports_fixtures(
+            date_from="2023-01-01",
+            date_to=sports_end,
+            out_path=ROOT / "data/raw/sports_fixtures.csv",
+        )
+        if not fixtures.empty:
+            print(f"     Football fixtures: {len(fixtures)} total")
+            counts = fixtures.groupby("competition").size()
+            for comp, n in counts.items():
+                print(f"       {comp}: {n}")
+        else:
+            print("     No football fixtures fetched (FOOTBALL_DATA_API_KEY not set?)")
+    except Exception as exc:
+        print(f"     WARNING: Sports fetch failed: {exc} — continuing without sports data.")
 
     # 2. DCC footfall counters
     step("2/3  Fetching DCC pedestrian footfall counters…")

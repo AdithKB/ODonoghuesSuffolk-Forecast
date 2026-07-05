@@ -250,10 +250,14 @@ The entire accuracy ceiling is synthetic data. Real data will:
 │   ├── fetch_public_data.py              Weather, airport, cruise, calendar signals
 │   ├── fetch_footfall.py                 DCC pedestrian counter data
 │   ├── fetch_events.py                   Event data fetching
+│   ├── fetch_sports.py                   TV sports fixtures (football-data.org API + static Six Nations)
 │   └── run_eda.py                        Generates EDA charts to notebooks/eda/
 ├── data/
 │   ├── synthetic/odonoghues_hourly.csv   Synthetic training data (replace with real POS)
-│   ├── raw/                              All fetched external data files
+│   ├── raw/
+│   │   ├── sports_fixtures.csv           Football fixtures from football-data.org (committed — public data, no PII)
+│   │   ├── six_nations_fixtures.csv      Static Six Nations 2023-2026 schedule (committed — public data)
+│   │   └── ...                           Other fetched external data files
 │   └── processed/features.parquet        Joined, engineered feature table (model input)
 ├── models/
 │   ├── xgb_{target}.json                 Global XGBoost models
@@ -341,3 +345,11 @@ Auto-detects timestamp and food/kitchen columns, drops PII, aggregates to hourly
 - `data/processed/features.parquet` — engineered features, no PII
 - `models/*.json` / `models/*.pkl` — trained model weights, no raw data
 - All public data in `data/raw/` fetched by `refresh_data.py`
+- `data/raw/sports_fixtures.csv` — aggregated public fixture data from football-data.org, no PII
+- `data/raw/six_nations_fixtures.csv` — static public Six Nations schedule, no PII
+
+### Environment variables (never commit values)
+- `FOOTBALL_DATA_API_KEY` — free API key from football-data.org for fetching football fixtures.
+  Store in `.env` at project root (already .gitignored). Used by `src/fetch_sports.py`.
+  Without this key, `fetch_sports_fixtures()` returns an empty DataFrame and the pipeline continues.
+  Free tier: 10 requests/min, covers PL, BL1, CL, EL, PD, WC, EC competitions.

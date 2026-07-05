@@ -186,6 +186,107 @@ def add_venue_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_sports_features(
+    df: pd.DataFrame,
+    sports_path: "Path | str | None" = "data/raw/sports_fixtures.csv",
+    six_nations_path: "Path | str | None" = "data/raw/six_nations_fixtures.csv",
+    window_hours: int = 3,
+) -> pd.DataFrame:
+    """
+    Compute TV sports feature columns for each hourly row.
+
+    For each hourly timestamp, look for qualifying fixtures within a ±window_hours
+    window around that hour and compute:
+      tv_sports_flag            1 if any match in the ±3h window, else 0
+      tv_sports_intensity       max intensity score of any match in the window (0 if none)
+      match_kickoff_proximity   hours to nearest kickoff in the window (99 if none)
+      is_ireland_match_window   1 if an Ireland match (football or rugby) is in the window
+      tv_sports_match_label     "Competition: Home vs Away" of most intense match (else "")
+
+    Intensity scale: 1 = regular league match, 2 = CL/big derby/Six Nations,
+                     3 = WC/EC knockout / CL Final / Ireland international
+    """
+    frames = []
+    for p in [sports_path, six_nations_path]:
+        if p and Path(p).exists():
+            try:
+                frames.append(pd.read_csv(p))
+            except Exception as e:
+                print(f"  Warning: could not load sports fixtures from {p}: {e}")
+
+    if not frames:
+        print("  No sports fixture files found — skipping tv_sports features (zeros).")
+        df["tv_sports_flag"] = 0
+        df["tv_sports_intensity"] = 0
+        df["match_kickoff_proximity"] = 99
+        df["is_ireland_match_window"] = 0
+        df["tv_sports_match_label"] = ""
+        return df
+
+    fixtures = pd.concat(frames, ignore_index=True)
+
+    # Build kickoff datetime column
+    def _parse_ko(row):
+        try:
+            return pd.Timestamp(f"{row['date']} {row['kickoff_local']}")
+        except Exception:
+            return pd.NaT
+
+    fixtures["kickoff_dt"] = fixtures.apply(_parse_ko, axis=1)
+    fixtures = fixtures.dropna(subset=["kickoff_dt"]).copy()
+    fixtures["intensity"] = pd.to_numeric(fixtures["intensity"], errors="coerce").fillna(0).astype(int)
+    fixtures["is_ireland_match"] = fixtures["is_ireland_match"].astype(bool)
+
+    # Numpy arrays for fast vectorised loop
+    ko_arr   = fixtures["kickoff_dt"].values.astype("datetime64[s]")
+    int_arr  = fixtures["intensity"].values
+    ire_arr  = fixtures["is_ireland_match"].values
+    home_arr = fixtures["home_team"].values
+    away_arr = fixtures["away_team"].values
+    comp_arr = fixtures["competition"].values
+
+    timestamps = pd.to_datetime(df["timestamp_hour"]).values.astype("datetime64[s]")
+    n = len(df)
+    tv_flag      = np.zeros(n, dtype=np.int8)
+    tv_intensity = np.zeros(n, dtype=np.int8)
+    tv_proximity = np.full(n, 99.0)
+    tv_ireland   = np.zeros(n, dtype=np.int8)
+    tv_label     = [""] * n
+
+    win_sec = window_hours * 3600
+
+    for i, ts in enumerate(timestamps):
+        delta_sec = (ko_arr - ts).astype(np.int64)  # seconds, signed
+        in_win = np.abs(delta_sec) <= win_sec
+        if not in_win.any():
+            continue
+
+        tv_flag[i] = 1
+        tv_intensity[i] = int(int_arr[in_win].max())
+        abs_delta_h = np.abs(delta_sec[in_win]) / 3600.0
+        tv_proximity[i] = round(float(abs_delta_h.min()), 1)
+        tv_ireland[i] = int(ire_arr[in_win].any())
+
+        # Label: most intense match; tie-break: prefer Ireland
+        idxs = np.where(in_win)[0]
+        intensities_win = int_arr[idxs]
+        max_int = intensities_win.max()
+        top_idxs = idxs[intensities_win == max_int]
+        ire_top = ire_arr[top_idxs]
+        pick = top_idxs[ire_top][0] if ire_top.any() else top_idxs[0]
+        tv_label[i] = f"{comp_arr[pick]}: {home_arr[pick]} vs {away_arr[pick]}"
+
+    df["tv_sports_flag"]          = tv_flag.astype(int)
+    df["tv_sports_intensity"]     = tv_intensity.astype(int)
+    df["match_kickoff_proximity"] = tv_proximity
+    df["is_ireland_match_window"] = tv_ireland.astype(int)
+    df["tv_sports_match_label"]   = tv_label
+
+    active = int(tv_flag.sum())
+    print(f"  TV sports: {active} hourly slots have a match within ±{window_hours}h")
+    return df
+
+
 def add_external_features(df: pd.DataFrame) -> pd.DataFrame:
     """Pass-through for weather, airport, cruise, footfall, and events columns."""
     external_cols = [
@@ -201,6 +302,9 @@ def add_external_features(df: pd.DataFrame) -> pd.DataFrame:
         "new_years_eve_flag", "new_years_day_flag",
         # Events
         "major_sports_event_flag", "city_event_flag", "st_patricks_week_flag",
+        # TV sports (from fetch_sports.py)
+        "tv_sports_flag", "tv_sports_intensity", "match_kickoff_proximity",
+        "is_ireland_match_window",
         "aviva_event_flag", "croke_park_event_flag", "nearby_venue_event_flag",
         "event_impact_score",
         "failte_event_count", "failte_free_event_count", "failte_festival_count",
@@ -256,6 +360,8 @@ def build_features(
     enrichment_path: Path | str | None = "data/raw/enrichment.csv",
     failte_path: Path | str | None = "data/raw/failte_events.csv",
     weather_path: Path | str | None = "data/raw/weather_hourly.csv",
+    sports_path: Path | str | None = "data/raw/sports_fixtures.csv",
+    six_nations_path: Path | str | None = "data/raw/six_nations_fixtures.csv",
 ) -> pd.DataFrame:
     """
     Transform a raw hourly dataframe into a model-ready supervised table.
@@ -265,9 +371,11 @@ def build_features(
     raw             : raw hourly dataframe (from synthetic.py or real POS export)
     targets         : columns to generate lag/rolling features for
     drop_na         : drop rows where any lag/rolling feature is NaN
-    footfall_path   : path to hourly footfall CSV (from fetch_footfall.py). None to skip.
-    enrichment_path : path to daily enrichment CSV (from fetch_public_data.py). None to skip.
-    failte_path     : path to Fáilte Ireland events CSV. None to skip.
+    footfall_path    : path to hourly footfall CSV (from fetch_footfall.py). None to skip.
+    enrichment_path  : path to daily enrichment CSV (from fetch_public_data.py). None to skip.
+    failte_path      : path to Fáilte Ireland events CSV. None to skip.
+    sports_path      : path to football fixtures CSV (from fetch_sports.py). None to skip.
+    six_nations_path : path to Six Nations fixtures CSV. None to skip.
 
     Returns
     -------
@@ -346,6 +454,9 @@ def build_features(
         new_cols = set(df.columns) - before_cols
         print(f"  Joined {len(new_cols)} weather columns from {weather_path}")
 
+    # --- Join TV sports fixtures (hourly window features) ---
+    df = add_sports_features(df, sports_path=sports_path, six_nations_path=six_nations_path)
+
     for target in targets:
         if target not in df.columns:
             continue
@@ -374,8 +485,9 @@ def get_feature_columns(df: pd.DataFrame, targets: list[str]) -> list[str]:
         "sales_total", "covers_count", "busy_label",
         "bar_staff_count", "kitchen_staff_count",
         "stockout_flag", "menu_change_flag", "promo_flag",
-        "live_music_flag",   # replaced by is_live_music_window
+        "live_music_flag",         # replaced by is_live_music_window
         "hour", "weekday", "month", "is_weekend",  # kept in df but derived above too
+        "tv_sports_match_label",   # string column — display only, not a model feature
     }
     return [c for c in df.columns if c not in exclude and c not in targets]
 

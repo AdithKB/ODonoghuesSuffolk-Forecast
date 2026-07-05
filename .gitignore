@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 .env
+# FOOTBALL_DATA_API_KEY — stored in .env, never commit the .env file
+# Get a free key at https://www.football-data.org/client/register
 .venv/
 env/
 venv/

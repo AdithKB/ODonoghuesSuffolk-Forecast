@@ -98,6 +98,9 @@ SAFE_FOR_NEXT_DAY = [
     # Same-slot seasonal averages (4-week lookback, no same-day leakage)
     "orders_count_same_slot_4w_avg",
     "food_tickets_count_same_slot_4w_avg",
+    # TV sports signal (from fetch_sports.py fixtures — known ahead of match day)
+    "tv_sports_flag", "tv_sports_intensity",
+    "match_kickoff_proximity", "is_ireland_match_window",
 ]
 
 # Full feature set (adds intra-day lags — usable for same-day nowcasting)
