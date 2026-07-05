@@ -65,6 +65,9 @@ def fetch_weather_historical(
             "precipitation",
             "wind_speed_10m",
             "weathercode",
+            "apparent_temperature",
+            "wind_gusts_10m",
+            "sunshine_duration",
         ]),
         "timezone": DUBLIN_TZ,
     }
@@ -74,11 +77,15 @@ def fetch_weather_historical(
     data = resp.json()["hourly"]
 
     df = pd.DataFrame({
-        "timestamp_hour":    pd.to_datetime(data["time"]),
-        "temp_c":            data["temperature_2m"],
-        "rain_mm":           data["precipitation"],
-        "wind_speed_kmh":    data["wind_speed_10m"],
-        "weather_code":      data["weathercode"],
+        "timestamp_hour":      pd.to_datetime(data["time"]),
+        "temp_c":              data["temperature_2m"],
+        "rain_mm":             data["precipitation"],
+        "wind_speed_kmh":      data["wind_speed_10m"],
+        "weather_code":        data["weathercode"],
+        "apparent_temp_c":     data["apparent_temperature"],
+        "wind_gusts_kmh":      data["wind_gusts_10m"],
+        "sunshine_duration_min": [v / 60 if v is not None else 0.0
+                                  for v in data["sunshine_duration"]],
     })
     # WMO weather codes >= 61 = rain/storm/snow; >= 95 = thunderstorm
     df["weather_severity_flag"] = (df["weather_code"] >= 61).astype(int)
@@ -104,6 +111,11 @@ def fetch_weather_forecast(days: int = 7, save_path: Path | None = None) -> pd.D
             "precipitation",
             "wind_speed_10m",
             "weathercode",
+            "apparent_temperature",
+            "wind_gusts_10m",
+            "sunshine_duration",
+            "uv_index",
+            "precipitation_probability",
         ]),
         "timezone":     DUBLIN_TZ,
         "forecast_days": days,
@@ -114,11 +126,17 @@ def fetch_weather_forecast(days: int = 7, save_path: Path | None = None) -> pd.D
     data = resp.json()["hourly"]
 
     df = pd.DataFrame({
-        "timestamp_hour": pd.to_datetime(data["time"]),
-        "temp_c":         data["temperature_2m"],
-        "rain_mm":        data["precipitation"],
-        "wind_speed_kmh": data["wind_speed_10m"],
-        "weather_code":   data["weathercode"],
+        "timestamp_hour":      pd.to_datetime(data["time"]),
+        "temp_c":              data["temperature_2m"],
+        "rain_mm":             data["precipitation"],
+        "wind_speed_kmh":      data["wind_speed_10m"],
+        "weather_code":        data["weathercode"],
+        "apparent_temp_c":     data["apparent_temperature"],
+        "wind_gusts_kmh":      data["wind_gusts_10m"],
+        "sunshine_duration_min": [v / 60 if v is not None else 0.0
+                                  for v in data["sunshine_duration"]],
+        "uv_index":            data.get("uv_index", [0.0] * len(data["time"])),
+        "precip_probability":  data.get("precipitation_probability", [0.0] * len(data["time"])),
     })
     df["weather_severity_flag"] = (df["weather_code"] >= 61).astype(int)
     df = df.drop(columns=["weather_code"])
@@ -154,8 +172,19 @@ def build_hourly_weather_table(
         log.warning(f"Weather fetch failed: {e}. Using empty weather.")
         weather = pd.DataFrame(columns=["timestamp_hour","temp_c","rain_mm","wind_speed_kmh","weather_severity_flag"])
 
+    # New columns only available from forecast; fill 0 for historical rows
+    new_wx_cols = [
+        "apparent_temp_c", "wind_gusts_kmh", "sunshine_duration_min",
+        "uv_index", "precip_probability",
+    ]
+    for col in new_wx_cols:
+        if col not in weather.columns:
+            weather[col] = 0.0
+        else:
+            weather[col] = weather[col].fillna(0.0)
+
     # Forward-fill weather for forecast hours that might not have data yet
-    wx_cols = ["temp_c","rain_mm","wind_speed_kmh"]
+    wx_cols = ["temp_c", "rain_mm", "wind_speed_kmh"] + new_wx_cols
     for col in wx_cols:
         if col in weather.columns:
             weather[col] = weather[col].ffill()

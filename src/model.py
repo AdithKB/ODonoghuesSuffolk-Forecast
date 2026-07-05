@@ -80,6 +80,8 @@ SAFE_FOR_NEXT_DAY = [
     "is_dinner_window", "is_after_food_close", "hours_since_food_close",
     "is_live_music_window",
     "temp_c", "rain_mm", "wind_speed_kmh", "weather_severity_flag",
+    "apparent_temp_c", "wind_gusts_kmh", "sunshine_duration_min",
+    "uv_index", "precip_probability",
     "airport_arrivals", "airport_arrivals_lag1", "airport_arrivals_zscore",
     "cruise_ship_flag", "ships_in_port_count", "cruise_passenger_estimate",
     "major_sports_event_flag", "city_event_flag", "st_patricks_week_flag",
@@ -101,6 +103,12 @@ SAFE_FOR_NEXT_DAY = [
     # TV sports signal (from fetch_sports.py fixtures — known ahead of match day)
     "tv_sports_flag", "tv_sports_intensity",
     "match_kickoff_proximity", "is_ireland_match_window",
+    # Schedule features (deterministic, all safe for next-day prediction)
+    "post_lecture_window", "fresher_week_flag", "rag_week_flag",
+    "exam_period_flag", "is_business_lunch_hour", "is_after_work_window",
+    "budget_day_flag", "cheltenham_festival_flag",
+    # Interaction features
+    "sunny_afternoon",
 ]
 
 # Full feature set (adds intra-day lags — usable for same-day nowcasting)

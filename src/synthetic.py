@@ -231,6 +231,76 @@ def _school_holiday(date):
 def _payday_period(date):
     return date.day <= 3 or date.day >= 28
 
+
+# ---------------------------------------------------------------------------
+# Schedule-based multipliers (derived from timestamp only, no features import)
+# ---------------------------------------------------------------------------
+
+def _budget_day_date(year):
+    """First Tuesday of October — Irish national Budget Day."""
+    from datetime import date as date_cls
+    oct1 = date_cls(year, 10, 1)
+    days_to_tue = (1 - oct1.weekday()) % 7  # Tuesday = weekday 1
+    return oct1 + timedelta(days=days_to_tue)
+
+
+def _cheltenham_dates_for_year(year):
+    """Return the set of 4 dates (Tue–Fri) for Cheltenham Festival in the given year."""
+    from datetime import date as date_cls
+    mar1 = date_cls(year, 3, 1)
+    # Find first Wednesday of March
+    days_to_wed = (2 - mar1.weekday()) % 7
+    first_wed = mar1 + timedelta(days=days_to_wed)
+    second_wed = first_wed + timedelta(weeks=1)
+    # Festival: Tue–Fri of that week
+    tue = second_wed - timedelta(days=1)
+    return {tue + timedelta(days=i) for i in range(4)}
+
+
+def _build_schedule_sets(years):
+    """Pre-compute budget and Cheltenham date sets for a list of years."""
+    budget_dates = {_budget_day_date(y) for y in years}
+    cheltenham_dates = set()
+    for y in years:
+        cheltenham_dates |= _cheltenham_dates_for_year(y)
+    return budget_dates, cheltenham_dates
+
+
+def _is_college_term(date):
+    """Approximate college term: Sep–Dec and Jan–May."""
+    m = date.month
+    return (m >= 9 and m <= 12) or (m >= 1 and m <= 5)
+
+
+def _schedule_mult(date, actual_hour, temp_c, rain_mm,
+                   budget_dates, cheltenham_dates):
+    """
+    Demand multiplier from deterministic schedule signals.
+    Applied on top of the standard multiplier stack in generate().
+    """
+    mult = 1.0
+    wd = date.weekday()
+    is_weekday = wd < 5
+
+    # Sunny afternoon boost: warm + simulated sunshine (no rain, temp > 18), afternoon 13–18
+    # We simulate sunshine_duration > 30 min as: no/light rain AND temperature > 18
+    if temp_c > 18 and rain_mm < 1.0 and 13 <= actual_hour <= 18:
+        mult *= 1.10
+
+    # Post-lecture window: weekday, term time, hour 13–18
+    if is_weekday and _is_college_term(date) and 13 <= actual_hour <= 18:
+        mult *= 1.08
+
+    # Budget Day (first Tuesday of October): strong boost 16–21
+    if date in budget_dates and 16 <= actual_hour <= 21:
+        mult *= 1.35
+
+    # Cheltenham Festival (Tue–Fri, 2nd week of March): busy 12–20
+    if date in cheltenham_dates and 12 <= actual_hour <= 20:
+        mult *= 1.20
+
+    return mult
+
 # ---------------------------------------------------------------------------
 # Synthetic weather (correlated with Dublin climate norms)
 # ---------------------------------------------------------------------------
@@ -290,6 +360,7 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
     years = list({d.year for d in dates})
 
     irish_holidays = _build_irish_holidays(years)
+    budget_dates, cheltenham_dates = _build_schedule_sets(years)
     weather_df = _gen_weather(dates)
     airport_df = _gen_airport_arrivals(dates)
     cruise_df = _gen_cruise_days(dates)
@@ -432,6 +503,8 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
                 * _event_mult(ctx)
                 * _live_music_mult(actual_hour, wd, is_music)
                 * _footfall_mult(ff_count)
+                * _schedule_mult(date, actual_hour, temp_c, rain_mm,
+                                 budget_dates, cheltenham_dates)
             )
 
             mean_orders = base * mult

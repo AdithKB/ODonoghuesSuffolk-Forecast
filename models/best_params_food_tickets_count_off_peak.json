@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_depth": 7,
-    "learning_rate": 0.01623643452355736,
-    "n_estimators": 796,
-    "min_child_weight": 6,
-    "subsample": 0.8929493692577253,
-    "colsample_bytree": 0.5010544538021385,
-    "reg_alpha": 2.65464787770838,
-    "reg_lambda": 2.6227661851337425
+    "max_depth": 8,
+    "learning_rate": 0.013757671666134348,
+    "n_estimators": 575,
+    "min_child_weight": 1,
+    "subsample": 0.6492807070227306,
+    "colsample_bytree": 0.6552619738333361,
+    "reg_alpha": 2.0655754628939165,
+    "reg_lambda": 2.6547603802825983
   },
   "feat_avail": [
     "orders_count_lag_24h",
@@ -50,6 +50,11 @@
     "rain_mm",
     "wind_speed_kmh",
     "weather_severity_flag",
+    "apparent_temp_c",
+    "wind_gusts_kmh",
+    "sunshine_duration_min",
+    "uv_index",
+    "precip_probability",
     "airport_arrivals",
     "airport_arrivals_lag1",
     "airport_arrivals_zscore",
@@ -87,6 +92,15 @@
     "tv_sports_flag",
     "tv_sports_intensity",
     "match_kickoff_proximity",
-    "is_ireland_match_window"
+    "is_ireland_match_window",
+    "post_lecture_window",
+    "fresher_week_flag",
+    "rag_week_flag",
+    "exam_period_flag",
+    "is_business_lunch_hour",
+    "is_after_work_window",
+    "budget_day_flag",
+    "cheltenham_festival_flag",
+    "sunny_afternoon"
   ]
 }

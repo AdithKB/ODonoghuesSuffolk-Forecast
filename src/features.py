@@ -186,6 +186,91 @@ def add_venue_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_schedule_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deterministic schedule-based demand signals derived purely from the timestamp.
+    No external data needed — all flags are computable for any future date.
+    """
+    ts = df["timestamp_hour"]
+    h = ts.dt.hour
+    wd = ts.dt.weekday  # 0=Mon, 6=Sun
+    m = ts.dt.month
+    day = ts.dt.day
+    is_weekday = (wd < 5).astype(int)
+
+    # college_term_flag: prefer enrichment CSV value; derive from month if absent
+    if "college_term_flag" not in df.columns:
+        df["college_term_flag"] = (
+            ((m >= 9) & (m <= 12)) | ((m >= 1) & (m <= 5))
+        ).astype(int)
+
+    # post_lecture_window: weekday, term time, 13–18
+    college_term = df["college_term_flag"].fillna(0).astype(int)
+    df["post_lecture_window"] = (
+        is_weekday
+        & college_term
+        & h.between(13, 18)
+    ).astype(int)
+
+    # fresher_week_flag: first full week of October (Mon–Sun containing first Monday on/after Oct 1)
+    def _fresher_week_dates(year):
+        oct1 = pd.Timestamp(year, 10, 1)
+        days_to_mon = (7 - oct1.weekday()) % 7
+        first_mon = oct1 + pd.Timedelta(days=days_to_mon)
+        return pd.date_range(first_mon, periods=7, freq="D")
+
+    fresher_dates = set()
+    for y in ts.dt.year.unique():
+        for d in _fresher_week_dates(y):
+            fresher_dates.add(d.date())
+    df["fresher_week_flag"] = ts.dt.date.map(lambda d: d in fresher_dates).astype(int)
+
+    # rag_week_flag: approx third week of February (Feb 14–22)
+    df["rag_week_flag"] = ((m == 2) & day.between(14, 22)).astype(int)
+
+    # exam_period_flag: late Nov–Dec + May
+    df["exam_period_flag"] = (
+        ((m == 11) & (day >= 20)) | (m == 12) | (m == 5)
+    ).astype(int)
+
+    # is_business_lunch_hour: weekday 12–13, not bank holiday
+    bank_hol = df.get("bank_holiday_flag", pd.Series(0, index=df.index))
+    df["is_business_lunch_hour"] = (
+        is_weekday & h.between(12, 13) & (bank_hol == 0)
+    ).astype(int)
+
+    # is_after_work_window: weekday 17–19, not bank holiday
+    df["is_after_work_window"] = (
+        is_weekday & h.between(17, 19) & (bank_hol == 0)
+    ).astype(int)
+
+    # budget_day_flag: first Tuesday of October each year (Irish national Budget Day)
+    def _budget_day(year):
+        oct1 = pd.Timestamp(year, 10, 1)
+        days_to_tue = (1 - oct1.weekday()) % 7  # Tuesday = weekday 1
+        return (oct1 + pd.Timedelta(days=days_to_tue)).date()
+
+    budget_dates = {_budget_day(y) for y in ts.dt.year.unique()}
+    df["budget_day_flag"] = ts.dt.date.map(lambda d: d in budget_dates).astype(int)
+
+    # cheltenham_festival_flag: Tue–Fri of week containing the 2nd Wednesday of March
+    def _cheltenham_dates(year):
+        mar1 = pd.Timestamp(year, 3, 1)
+        days_to_wed = (2 - mar1.weekday()) % 7
+        first_wed = mar1 + pd.Timedelta(days=days_to_wed)
+        second_wed = first_wed + pd.Timedelta(weeks=1)
+        tue = second_wed - pd.Timedelta(days=1)
+        return pd.date_range(tue, periods=4, freq="D")
+
+    cheltenham_dates = set()
+    for y in ts.dt.year.unique():
+        for d in _cheltenham_dates(y):
+            cheltenham_dates.add(d.date())
+    df["cheltenham_festival_flag"] = ts.dt.date.map(lambda d: d in cheltenham_dates).astype(int)
+
+    return df
+
+
 def add_sports_features(
     df: pd.DataFrame,
     sports_path: "Path | str | None" = "data/raw/sports_fixtures.csv",
@@ -292,6 +377,8 @@ def add_external_features(df: pd.DataFrame) -> pd.DataFrame:
     external_cols = [
         # Weather
         "temp_c", "rain_mm", "wind_speed_kmh", "weather_severity_flag",
+        "apparent_temp_c", "wind_gusts_kmh", "sunshine_duration_min",
+        "uv_index", "precip_probability",
         # Airport + cruise
         "airport_arrivals", "airport_arrivals_lag1",
         "cruise_ship_flag", "ships_in_port_count", "cruise_passenger_estimate",
@@ -344,6 +431,12 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
         df["tourism_pressure"] = (
             df["airport_arrivals_zscore"] + df["cruise_ship_flag"].astype(float)
         )
+
+    # Sunny afternoon boost: warm + sunshine = people stop for a pint
+    if "sunshine_duration_min" in df.columns and "temp_c" in df.columns:
+        df["sunny_afternoon"] = (
+            (df["sunshine_duration_min"] > 20) & (df["temp_c"] > 16)
+        ).astype(int)
 
     return df
 
@@ -465,6 +558,7 @@ def build_features(
 
     df = add_calendar_features(df, holiday_set)
     df = add_venue_features(df)
+    df = add_schedule_features(df)
     df = add_external_features(df)
     df = add_interaction_features(df)
 

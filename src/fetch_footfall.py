@@ -90,6 +90,10 @@ ANNUAL_FILES = [
     },
     {
         "year": 2026,
+        # NOTE (2026-07-05): This file only covers 1 Jan – 2 Jun 2026.
+        # As of today Smart Dublin has not published a newer 2026 file.
+        # Check https://data.smartdublin.ie/dataset/cc421859-1f4f-43f6-b349-f4ca0e1c60fa
+        # and update this URL + resource ID when the Jul–Dec 2026 (or full-year) file appears.
         "url":  "https://data.smartdublin.ie/dataset/cc421859-1f4f-43f6-b349-f4ca0e1c60fa"
                 "/resource/6559b005-38c2-4648-a926-f1a3c70a99a2"
                 "/download/pedestrain-counts-1-jan-2-jun-2026.xlsx",
