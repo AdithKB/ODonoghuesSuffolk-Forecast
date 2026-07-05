@@ -1171,15 +1171,15 @@ def main():
     st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
     render_signals_panel(forecast, forecast_date)
 
-    # ── Hourly Chart ─────────────────────────────────────────────────────────
-    st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
-    render_hourly_chart(forecast)
-
     # ── Today's Signals (collapsed) ──────────────────────────────────────────
     st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
     df_day = df[df["timestamp_hour"].dt.date == forecast_date.date()].copy()
     with st.expander("Today's Signals"):
         render_today_signals(df_day, overrides, df)
+
+    # ── Hourly Chart ─────────────────────────────────────────────────────────
+    st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
+    render_hourly_chart(forecast)
 
     # ── Hourly table ─────────────────────────────────────────────────────────
     st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
