@@ -839,7 +839,7 @@ def render_signals_panel(forecast, forecast_date):
     )
     st.markdown(html, unsafe_allow_html=True)
 
-def render_today_signals(df_day: pd.DataFrame, overrides: dict) -> None:
+def render_today_signals(df_day: pd.DataFrame, overrides: dict, df_full: pd.DataFrame | None = None) -> None:
     if df_day.empty:
         st.markdown('<div class="panel-card"><div class="panel-title">Today\'s Signals</div><div class="ts-none">No data for this date.</div></div>', unsafe_allow_html=True)
         return
@@ -874,9 +874,27 @@ def render_today_signals(df_day: pd.DataFrame, overrides: dict) -> None:
 
     # --- External Conditions ---
     airport_z = _mean("airport_arrivals_zscore")
-    footfall  = _mean("suffolk_footfall_roll_24h")
     rain      = float(overrides.get("rain_mm", _mean("rain_mm", 1.0)))
     temp      = float(overrides.get("temp_c",  _mean("temp_c",  12.0)))
+
+    # Footfall: DCC counters have a 1-2 day publishing lag.
+    # If today's value is zero (not yet published), fall back to the most recent
+    # available non-zero reading from the full dataset and label it accordingly.
+    footfall = _mean("suffolk_footfall_roll_24h")
+    ff_label = "Suffolk St footfall"
+    if footfall > 0:
+        ff_str = f"{footfall:,.0f}"
+    elif df_full is not None and "suffolk_footfall_roll_24h" in df_full.columns:
+        recent = df_full[df_full["suffolk_footfall_roll_24h"] > 0]
+        if not recent.empty:
+            last_ts  = recent["timestamp_hour"].max()
+            last_val = float(recent.loc[recent["timestamp_hour"] == last_ts, "suffolk_footfall_roll_24h"].iloc[0])
+            ff_str   = f"{last_val:,.0f}"
+            ff_label = f"Suffolk St footfall (as of {pd.Timestamp(last_ts).strftime('%-d %b')})"
+        else:
+            ff_str = "—"
+    else:
+        ff_str = "—"
 
     if airport_z > 0.75:
         ap_val = f'<span class="ts-row-value up">▲ above avg (+{airport_z:.1f}σ)</span>'
@@ -894,11 +912,9 @@ def render_today_signals(df_day: pd.DataFrame, overrides: dict) -> None:
     else:
         rain_str = f"{rain:.1f} mm — heavy"
 
-    ff_str = f"{footfall:,.0f}" if footfall > 0 else "—"
-
     conditions_html = (
         f'<div class="ts-row"><span class="ts-row-label">Airport arrivals</span>{ap_val}</div>'
-        f'<div class="ts-row"><span class="ts-row-label">Suffolk St footfall</span><span class="ts-row-value">{ff_str}</span></div>'
+        f'<div class="ts-row"><span class="ts-row-label">{ff_label}</span><span class="ts-row-value">{ff_str}</span></div>'
         f'<div class="ts-row"><span class="ts-row-label">Rain</span><span class="ts-row-value">{rain_str}</span></div>'
         f'<div class="ts-row"><span class="ts-row-label">Temperature</span><span class="ts-row-value">{temp:.0f} °C</span></div>'
     )
@@ -1119,6 +1135,12 @@ def main():
     st.markdown('<div style="height:1rem;"></div>', unsafe_allow_html=True)
     render_hourly_chart(forecast)
 
+    # ── Today's Signals (collapsed) ──────────────────────────────────────────
+    st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
+    df_day = df[df["timestamp_hour"].dt.date == forecast_date.date()].copy()
+    with st.expander("Today's Signals"):
+        render_today_signals(df_day, overrides, df)
+
     # ── Hourly table ─────────────────────────────────────────────────────────
     st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
     with st.expander("View Full Hourly Data"):
@@ -1146,7 +1168,7 @@ def main():
                 f"<td>{row['Baseline']}</td>"
                 f"</tr>"
             )
-        
+
         table_html = f"""
         <div class="table-responsive">
         <table class="custom-table">
@@ -1166,15 +1188,9 @@ def main():
         </div>
         """
         st.markdown(table_html, unsafe_allow_html=True)
-        
+
         csv_out = out[["Time", "Shift", "Orders", "Food", "Baseline"]].to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv_out, file_name=f"odonoghues_{forecast_date.strftime('%Y-%m-%d')}.csv", mime="text/csv")
-
-    # ── Today's Signals (collapsed) ──────────────────────────────────────────
-    st.markdown('<div style="height:0.5rem;"></div>', unsafe_allow_html=True)
-    df_day = df[df["timestamp_hour"].dt.date == forecast_date.date()].copy()
-    with st.expander("Today's Signals"):
-        render_today_signals(df_day, overrides)
 
 if __name__ == "__main__":
     main()
