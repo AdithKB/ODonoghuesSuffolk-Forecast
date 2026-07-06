@@ -103,6 +103,8 @@ SAFE_FOR_NEXT_DAY = [
     # TV sports signal (from fetch_sports.py fixtures — known ahead of match day)
     "tv_sports_flag", "tv_sports_intensity",
     "match_kickoff_proximity", "is_ireland_match_window",
+    # Pre-event buildup (fixture schedule is public knowledge, safe for next-day)
+    "days_until_next_match", "is_match_tomorrow", "is_match_in_2_days",
     # Schedule features (deterministic, all safe for next-day prediction)
     "post_lecture_window", "fresher_week_flag", "rag_week_flag",
     "exam_period_flag", "is_business_lunch_hour", "is_after_work_window",
@@ -653,13 +655,21 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
     return objective, feat_avail, df_s, X_all, y_all
 
 
+def _early_stop_callback(study: optuna.Study, trial: optuna.Trial) -> None:
+    """Stop Optuna search when the last 20 trials have converged (range < 0.005)."""
+    if len(study.trials) >= 20:
+        recent = [t.value for t in study.trials[-20:] if t.value is not None]
+        if recent and (max(recent) - min(recent)) < 0.005:
+            study.stop()
+
+
 def tune_and_train_shift_model(
     df: pd.DataFrame,
     target: str,
     shift_name: str,
     shift_mask_fn,
     feature_cols: list[str],
-    n_trials: int = 50,
+    n_trials: int = 100,
 ) -> tuple[xgb.Booster | None, dict, list[str]]:
     """
     Run Optuna (n_trials) for one shift+target, train final model on full shift data.
@@ -683,7 +693,7 @@ def tune_and_train_shift_model(
     )
 
     study = optuna.create_study(direction="minimize")
-    study.optimize(obj_fn, n_trials=n_trials, show_progress_bar=False)
+    study.optimize(obj_fn, n_trials=n_trials, callbacks=[_early_stop_callback], show_progress_bar=False)
     best = study.best_params.copy()
     n_rounds = best.pop("n_estimators")
 
@@ -713,7 +723,7 @@ def train_shift_models(
     target: str,
     feature_cols: list[str],
     global_model: xgb.XGBRegressor,
-    n_trials: int = 50,
+    n_trials: int = 100,
 ) -> None:
     """
     Train and save per-shift XGBoost models with Optuna-tuned asymmetric loss.
@@ -832,8 +842,8 @@ def main():
         print(f"\n  Models saved to {MODELS_DIR}/")
 
         # Train shift-specific models with Optuna asymmetric tuning
-        print(f"\n  Running Optuna shift-specific tuning (50 trials × 4 shifts)…")
-        train_shift_models(df, target, feature_cols, xgb_final, n_trials=50)
+        print(f"\n  Running Optuna shift-specific tuning (100 trials × 4 shifts)…")
+        train_shift_models(df, target, feature_cols, xgb_final, n_trials=100)
 
 if __name__ == "__main__":
     main()

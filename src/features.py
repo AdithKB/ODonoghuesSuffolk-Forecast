@@ -314,6 +314,9 @@ def add_sports_features(
         df["match_kickoff_proximity"] = 99
         df["is_ireland_match_window"] = 0
         df["tv_sports_match_label"] = ""
+        df["days_until_next_match"] = 7
+        df["is_match_tomorrow"] = 0
+        df["is_match_in_2_days"] = 0
         return df
 
     fixtures = pd.concat(frames, ignore_index=True)
@@ -378,6 +381,22 @@ def add_sports_features(
     df["is_ireland_match_window"] = tv_ireland.astype(int)
     df["tv_sports_match_label"]   = tv_label
 
+    # Pre-event buildup: days until next high-intensity fixture
+    hi_fixtures = fixtures[fixtures["intensity"] >= 2].copy()
+    hi_ko_dates = pd.to_datetime(hi_fixtures["kickoff_dt"]).dt.normalize().drop_duplicates().sort_values().values
+
+    days_until = np.full(n, 7, dtype=np.int8)  # default: 7 = "none in window"
+    for i, ts in enumerate(timestamps):
+        ts_date = pd.Timestamp(ts).normalize().to_datetime64()
+        future = hi_ko_dates[hi_ko_dates >= ts_date]
+        if len(future) > 0:
+            diff = int((future[0] - ts_date) / np.timedelta64(1, 'D'))
+            days_until[i] = min(diff, 7)
+
+    df["days_until_next_match"] = days_until.astype(int)
+    df["is_match_tomorrow"]     = (days_until == 1).astype(int)
+    df["is_match_in_2_days"]    = (days_until == 2).astype(int)
+
     active = int(tv_flag.sum())
     print(f"  TV sports: {active} hourly slots have a match within ±{window_hours}h")
     return df
@@ -403,6 +422,8 @@ def add_external_features(df: pd.DataFrame) -> pd.DataFrame:
         # TV sports (from fetch_sports.py)
         "tv_sports_flag", "tv_sports_intensity", "match_kickoff_proximity",
         "is_ireland_match_window",
+        # Pre-event buildup (days until next high-intensity fixture)
+        "days_until_next_match", "is_match_tomorrow", "is_match_in_2_days",
         "aviva_event_flag", "croke_park_event_flag", "nearby_venue_event_flag",
         "event_impact_score",
         "failte_event_count", "failte_free_event_count", "failte_festival_count",
