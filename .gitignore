@@ -12,6 +12,7 @@ env.bak/
 venv.bak/
 .DS_Store
 data/cron.log
+models/optuna_journal.log
 apply_ui_fixes.py
 
 # -----------------------------------------------------------------------

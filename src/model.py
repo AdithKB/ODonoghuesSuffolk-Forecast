@@ -18,8 +18,16 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 import optuna
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import xgboost as xgb
+
+try:
+    from optuna_integration import XGBoostPruningCallback
+    _HAS_PRUNING = True
+except ImportError:
+    _HAS_PRUNING = False
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -610,24 +618,25 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
 
     def objective(trial: optuna.Trial) -> float:
         params = {
-            "max_depth":        trial.suggest_int("max_depth", 3, 8),
+            "grow_policy":      "lossguide",
+            "max_leaves":       trial.suggest_int("max_leaves", 8, 256, log=True),
             "learning_rate":    trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "num_boost_round":  trial.suggest_int("n_estimators", 100, 800),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 50, log=True),
             "subsample":        trial.suggest_float("subsample", 0.5, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-            "reg_alpha":        trial.suggest_float("reg_alpha", 0.0, 3.0),
-            "reg_lambda":       trial.suggest_float("reg_lambda", 0.0, 3.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.3, 1.0),
+            "reg_alpha":        trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+            "reg_lambda":       trial.suggest_float("reg_lambda", 1e-3, 25.0, log=True),
+            "gamma":            trial.suggest_float("gamma", 0.0, 5.0),
+            "eval_metric":      "mae",
             "seed": 42,
             "verbosity": 0,
         }
-        n_rounds = params.pop("num_boost_round")
 
         if n < 80:
             return float("inf")
 
         maes = []
-        # 3-fold walk-forward CV
+        # 3-fold walk-forward CV; pruning callback active on every fold
         for fold in range(3):
             train_end = int(n * (fold + 1) / 4)
             test_start = train_end
@@ -641,10 +650,16 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
             dtrain = xgb.DMatrix(X_tr, label=y_tr)
             dtest  = xgb.DMatrix(X_te, label=y_te)
 
+            callbacks = [xgb.callback.EarlyStopping(rounds=50, metric_name="val-mae")]
+            if _HAS_PRUNING:
+                callbacks.append(XGBoostPruningCallback(trial, "val-mae"))
+
             bst = xgb.train(
                 params, dtrain,
-                num_boost_round=n_rounds,
+                num_boost_round=1000,
                 obj=_asymmetric_obj,
+                evals=[(dtest, "val")],
+                callbacks=callbacks,
                 verbose_eval=False,
             )
             preds = np.maximum(bst.predict(dtest), 0)
@@ -692,28 +707,45 @@ def tune_and_train_shift_model(
         df_shift, target, feature_cols
     )
 
-    study = optuna.create_study(direction="minimize")
+    journal_path = str(MODELS_DIR / "optuna_journal.log")
+    storage = JournalStorage(JournalFileBackend(journal_path))
+    study = optuna.create_study(
+        study_name=f"{target}_{shift_name}",
+        storage=storage,
+        load_if_exists=True,
+        direction="minimize",
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10),
+    )
     study.optimize(obj_fn, n_trials=n_trials, callbacks=[_early_stop_callback], show_progress_bar=False)
     best = study.best_params.copy()
-    n_rounds = best.pop("n_estimators")
 
-    # Train final model on full shift data with best params
+    # Train final model on full shift data with best params + early stopping
     xgb_params = {
-        "max_depth":        best["max_depth"],
+        "grow_policy":      "lossguide",
+        "max_leaves":       best["max_leaves"],
         "learning_rate":    best["learning_rate"],
         "min_child_weight": best["min_child_weight"],
         "subsample":        best["subsample"],
         "colsample_bytree": best["colsample_bytree"],
         "reg_alpha":        best["reg_alpha"],
         "reg_lambda":       best["reg_lambda"],
+        "gamma":            best["gamma"],
+        "eval_metric":      "mae",
         "seed": 42,
         "verbosity": 0,
     }
-    dtrain = xgb.DMatrix(X_all, label=y_all, feature_names=feat_avail)
+    n_val = max(int(len(X_all) * 0.15), 30)
+    X_tr, y_tr = X_all[:-n_val], y_all[:-n_val]
+    X_vl, y_vl = X_all[-n_val:], y_all[-n_val:]
+    dtrain = xgb.DMatrix(X_tr, label=y_tr, feature_names=feat_avail)
+    dval   = xgb.DMatrix(X_vl, label=y_vl, feature_names=feat_avail)
     bst = xgb.train(
         xgb_params, dtrain,
-        num_boost_round=n_rounds,
+        num_boost_round=1000,
         obj=_asymmetric_obj,
+        evals=[(dval, "val")],
+        callbacks=[xgb.callback.EarlyStopping(rounds=50, metric_name="val-mae")],
+        verbose_eval=False,
     )
     return bst, study.best_params, feat_avail
 

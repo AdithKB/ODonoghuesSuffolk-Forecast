@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_depth": 6,
-    "learning_rate": 0.02995826419926225,
-    "n_estimators": 482,
-    "min_child_weight": 5,
-    "subsample": 0.8131324188149887,
-    "colsample_bytree": 0.5873056969623386,
-    "reg_alpha": 1.8558399663314817,
-    "reg_lambda": 1.4097876798404911
+    "max_depth": 8,
+    "learning_rate": 0.01983530746485235,
+    "n_estimators": 462,
+    "min_child_weight": 1,
+    "subsample": 0.7676785983934853,
+    "colsample_bytree": 0.5545651903579082,
+    "reg_alpha": 2.4759510980134136,
+    "reg_lambda": 2.641045143651396
   },
   "feat_avail": [
     "orders_count_lag_24h",
@@ -93,6 +93,9 @@
     "tv_sports_intensity",
     "match_kickoff_proximity",
     "is_ireland_match_window",
+    "days_until_next_match",
+    "is_match_tomorrow",
+    "is_match_in_2_days",
     "post_lecture_window",
     "fresher_week_flag",
     "rag_week_flag",
