@@ -275,6 +275,8 @@ def add_sports_features(
     df: pd.DataFrame,
     sports_path: "Path | str | None" = "data/raw/sports_fixtures.csv",
     six_nations_path: "Path | str | None" = "data/raw/six_nations_fixtures.csv",
+    horse_racing_path: "Path | str | None" = "data/raw/horse_racing_fixtures.csv",
+    ireland_rugby_path: "Path | str | None" = "data/raw/ireland_rugby_fixtures.csv",
     window_hours: int = 3,
 ) -> pd.DataFrame:
     """
@@ -290,9 +292,15 @@ def add_sports_features(
 
     Intensity scale: 1 = regular league match, 2 = CL/big derby/Six Nations,
                      3 = WC/EC knockout / CL Final / Ireland international
+
+    Sources loaded (each is optional — missing files are skipped):
+      sports_path        — football fixtures from football-data.org
+      six_nations_path   — static Six Nations 2023–2026
+      horse_racing_path  — horse racing fixtures (static + HRI PDF)
+      ireland_rugby_path — Ireland non-Six-Nations rugby (Autumn Nations + Summer Tour)
     """
     frames = []
-    for p in [sports_path, six_nations_path]:
+    for p in [sports_path, six_nations_path, horse_racing_path, ireland_rugby_path]:
         if p and Path(p).exists():
             try:
                 frames.append(pd.read_csv(p))
@@ -309,6 +317,9 @@ def add_sports_features(
         return df
 
     fixtures = pd.concat(frames, ignore_index=True)
+    # Normalise team name columns — empty away_team (horse racing) reads back as NaN
+    fixtures["home_team"] = fixtures["home_team"].fillna("")
+    fixtures["away_team"] = fixtures["away_team"].fillna("")
 
     # Build kickoff datetime column
     def _parse_ko(row):
@@ -455,20 +466,24 @@ def build_features(
     weather_path: Path | str | None = "data/raw/weather_hourly.csv",
     sports_path: Path | str | None = "data/raw/sports_fixtures.csv",
     six_nations_path: Path | str | None = "data/raw/six_nations_fixtures.csv",
+    horse_racing_path: Path | str | None = "data/raw/horse_racing_fixtures.csv",
+    ireland_rugby_path: Path | str | None = "data/raw/ireland_rugby_fixtures.csv",
 ) -> pd.DataFrame:
     """
     Transform a raw hourly dataframe into a model-ready supervised table.
 
     Parameters
     ----------
-    raw             : raw hourly dataframe (from synthetic.py or real POS export)
-    targets         : columns to generate lag/rolling features for
-    drop_na         : drop rows where any lag/rolling feature is NaN
-    footfall_path    : path to hourly footfall CSV (from fetch_footfall.py). None to skip.
-    enrichment_path  : path to daily enrichment CSV (from fetch_public_data.py). None to skip.
-    failte_path      : path to Fáilte Ireland events CSV. None to skip.
-    sports_path      : path to football fixtures CSV (from fetch_sports.py). None to skip.
-    six_nations_path : path to Six Nations fixtures CSV. None to skip.
+    raw               : raw hourly dataframe (from synthetic.py or real POS export)
+    targets           : columns to generate lag/rolling features for
+    drop_na           : drop rows where any lag/rolling feature is NaN
+    footfall_path      : path to hourly footfall CSV (from fetch_footfall.py). None to skip.
+    enrichment_path    : path to daily enrichment CSV (from fetch_public_data.py). None to skip.
+    failte_path        : path to Fáilte Ireland events CSV. None to skip.
+    sports_path        : path to football fixtures CSV (from fetch_sports.py). None to skip.
+    six_nations_path   : path to Six Nations fixtures CSV. None to skip.
+    horse_racing_path  : path to horse racing fixtures CSV. None to skip.
+    ireland_rugby_path : path to Ireland rugby fixtures CSV (non-Six-Nations). None to skip.
 
     Returns
     -------
@@ -548,7 +563,13 @@ def build_features(
         print(f"  Joined {len(new_cols)} weather columns from {weather_path}")
 
     # --- Join TV sports fixtures (hourly window features) ---
-    df = add_sports_features(df, sports_path=sports_path, six_nations_path=six_nations_path)
+    df = add_sports_features(
+        df,
+        sports_path=sports_path,
+        six_nations_path=six_nations_path,
+        horse_racing_path=horse_racing_path,
+        ireland_rugby_path=ireland_rugby_path,
+    )
 
     for target in targets:
         if target not in df.columns:

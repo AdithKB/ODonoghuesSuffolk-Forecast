@@ -80,6 +80,17 @@ def main():
     except Exception as exc:
         print(f"     WARNING: Sports fetch failed: {exc} — continuing without sports data.")
 
+    # 1c. Horse racing + Ireland rugby fixtures
+    step("1c/3  Building horse racing and Ireland rugby fixtures…")
+    try:
+        from src.fetch_horse_racing import build_horse_racing_csv, build_ireland_rugby_csv
+        hr = build_horse_racing_csv(out_path=ROOT / "data/raw/horse_racing_fixtures.csv")
+        print(f"     Horse racing: {len(hr)} fixtures saved")
+        rb = build_ireland_rugby_csv(out_path=ROOT / "data/raw/ireland_rugby_fixtures.csv")
+        print(f"     Ireland rugby: {len(rb)} fixtures saved")
+    except Exception as exc:
+        print(f"     WARNING: Horse racing/rugby fixtures failed: {exc} — continuing.")
+
     # 2. DCC footfall counters
     step("2/3  Fetching DCC pedestrian footfall counters…")
     from src.fetch_footfall import fetch_footfall, fetch_failte_events

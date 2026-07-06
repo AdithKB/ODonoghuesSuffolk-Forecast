@@ -257,13 +257,57 @@ def _cheltenham_dates_for_year(year):
     return {tue + timedelta(days=i) for i in range(4)}
 
 
+def _galway_festival_dates_for_year(year):
+    """Return the set of 7 dates for the Galway Racing Festival in the given year."""
+    from datetime import date as date_cls
+    _GALWAY = {
+        2023: date_cls(2023, 7, 25), 2024: date_cls(2024, 7, 29),
+        2025: date_cls(2025, 7, 28), 2026: date_cls(2026, 7, 27),
+    }
+    start = _GALWAY.get(year)
+    if start is None:
+        return set()
+    return {start + timedelta(days=i) for i in range(7)}
+
+
+def _punchestown_dates_for_year(year):
+    """Return the set of 5 dates for Punchestown Festival in the given year."""
+    from datetime import date as date_cls
+    _PUNCHESTOWN = {
+        2023: date_cls(2023, 4, 25), 2024: date_cls(2024, 4, 23),
+        2025: date_cls(2025, 4, 22), 2026: date_cls(2026, 4, 28),
+    }
+    start = _PUNCHESTOWN.get(year)
+    if start is None:
+        return set()
+    return {start + timedelta(days=i) for i in range(5)}
+
+
+def _autumn_nations_dates_for_year(year):
+    """Return the set of Autumn Nations Series home test match dates for a given year."""
+    from datetime import date as date_cls
+    _AUTUMN = {
+        2023: [date_cls(2023, 11, 11), date_cls(2023, 11, 19), date_cls(2023, 11, 25)],
+        2024: [date_cls(2024, 11, 9),  date_cls(2024, 11, 16), date_cls(2024, 11, 23)],
+        2025: [date_cls(2025, 11, 8),  date_cls(2025, 11, 15), date_cls(2025, 11, 22)],
+        2026: [date_cls(2026, 11, 7),  date_cls(2026, 11, 14), date_cls(2026, 11, 21)],
+    }
+    return set(_AUTUMN.get(year, []))
+
+
 def _build_schedule_sets(years):
-    """Pre-compute budget and Cheltenham date sets for a list of years."""
+    """Pre-compute budget, Cheltenham, Galway, Punchestown, and Autumn Nations date sets."""
     budget_dates = {_budget_day_date(y) for y in years}
     cheltenham_dates = set()
+    galway_dates = set()
+    punchestown_dates = set()
+    autumn_nations_dates = set()
     for y in years:
         cheltenham_dates |= _cheltenham_dates_for_year(y)
-    return budget_dates, cheltenham_dates
+        galway_dates |= _galway_festival_dates_for_year(y)
+        punchestown_dates |= _punchestown_dates_for_year(y)
+        autumn_nations_dates |= _autumn_nations_dates_for_year(y)
+    return budget_dates, cheltenham_dates, galway_dates, punchestown_dates, autumn_nations_dates
 
 
 def _is_college_term(date):
@@ -273,7 +317,9 @@ def _is_college_term(date):
 
 
 def _schedule_mult(date, actual_hour, temp_c, rain_mm,
-                   budget_dates, cheltenham_dates):
+                   budget_dates, cheltenham_dates,
+                   galway_dates=None, punchestown_dates=None,
+                   autumn_nations_dates=None):
     """
     Demand multiplier from deterministic schedule signals.
     Applied on top of the standard multiplier stack in generate().
@@ -295,9 +341,20 @@ def _schedule_mult(date, actual_hour, temp_c, rain_mm,
     if date in budget_dates and 16 <= actual_hour <= 21:
         mult *= 1.35
 
-    # Cheltenham Festival (Tue–Fri, 2nd week of March): busy 12–20
-    if date in cheltenham_dates and 12 <= actual_hour <= 20:
-        mult *= 1.20
+    # Major racing festivals (Cheltenham, Galway, Punchestown): hours 13–20 → ×1.25
+    # Galway festival is huge in July; Cheltenham drives big afternoon racing trade
+    _is_racing_festival = (
+        date in cheltenham_dates
+        or (galway_dates is not None and date in galway_dates)
+        or (punchestown_dates is not None and date in punchestown_dates)
+    )
+    if _is_racing_festival and 13 <= actual_hour <= 20:
+        mult *= 1.25
+
+    # Autumn Nations Series home tests at Aviva: evening boost hours 20–23 → ×1.30
+    if (autumn_nations_dates is not None and date in autumn_nations_dates
+            and 20 <= actual_hour <= 23):
+        mult *= 1.30
 
     return mult
 
@@ -360,7 +417,9 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
     years = list({d.year for d in dates})
 
     irish_holidays = _build_irish_holidays(years)
-    budget_dates, cheltenham_dates = _build_schedule_sets(years)
+    (budget_dates, cheltenham_dates,
+     galway_dates, punchestown_dates,
+     autumn_nations_dates) = _build_schedule_sets(years)
     weather_df = _gen_weather(dates)
     airport_df = _gen_airport_arrivals(dates)
     cruise_df = _gen_cruise_days(dates)
@@ -371,7 +430,12 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
 
     # Load sports fixtures and build a per-hour lookup (±2h window around kickoff)
     _sports_frames = []
-    for sp in ["data/raw/sports_fixtures.csv", "data/raw/six_nations_fixtures.csv"]:
+    for sp in [
+        "data/raw/sports_fixtures.csv",
+        "data/raw/six_nations_fixtures.csv",
+        "data/raw/horse_racing_fixtures.csv",
+        "data/raw/ireland_rugby_fixtures.csv",
+    ]:
         if Path(sp).exists():
             try:
                 _sports_frames.append(pd.read_csv(sp))
@@ -504,7 +568,9 @@ def generate(start: str = "2024-01-01", end: str = "2025-12-31",
                 * _live_music_mult(actual_hour, wd, is_music)
                 * _footfall_mult(ff_count)
                 * _schedule_mult(date, actual_hour, temp_c, rain_mm,
-                                 budget_dates, cheltenham_dates)
+                                 budget_dates, cheltenham_dates,
+                                 galway_dates, punchestown_dates,
+                                 autumn_nations_dates)
             )
 
             mean_orders = base * mult

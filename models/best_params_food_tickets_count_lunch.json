@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_depth": 6,
-    "learning_rate": 0.02549897566147312,
-    "n_estimators": 798,
-    "min_child_weight": 7,
-    "subsample": 0.6051027803533756,
-    "colsample_bytree": 0.57429624474215,
-    "reg_alpha": 2.8619744259811135,
-    "reg_lambda": 0.485310730134872
+    "max_depth": 5,
+    "learning_rate": 0.0321879348738352,
+    "n_estimators": 626,
+    "min_child_weight": 3,
+    "subsample": 0.7223288851595056,
+    "colsample_bytree": 0.749397807304501,
+    "reg_alpha": 2.511754324231877,
+    "reg_lambda": 2.409744788374934
   },
   "feat_avail": [
     "orders_count_lag_24h",
