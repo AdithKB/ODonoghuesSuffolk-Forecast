@@ -22,6 +22,7 @@ apply_ui_fixes.py
 # Only the aggregated hourly CSV (data/synthetic/odonoghues_hourly.csv
 # or its real-data replacement) and features.parquet are safe to commit.
 # -----------------------------------------------------------------------
+data/pubdata/
 data/raw/pos_*/
 data/raw/*pos*.csv
 data/raw/*pos*.xlsx

@@ -582,6 +582,12 @@ def predict_next_day(
 # Asymmetric loss (penalise under-predictions 2× more)
 # ---------------------------------------------------------------------------
 
+def _mae_feval(preds: np.ndarray, dtrain: xgb.DMatrix):
+    """Named eval metric for use alongside custom objective functions."""
+    labels = dtrain.get_label()
+    return "mae", float(np.mean(np.abs(preds - labels)))
+
+
 def _asymmetric_obj(y_pred: np.ndarray, dtrain: xgb.DMatrix):
     """
     Custom XGBoost gradient/hessian for asymmetric squared loss.
@@ -627,7 +633,6 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
             "reg_alpha":        trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
             "reg_lambda":       trial.suggest_float("reg_lambda", 1e-3, 25.0, log=True),
             "gamma":            trial.suggest_float("gamma", 0.0, 5.0),
-            "eval_metric":      "mae",
             "seed": 42,
             "verbosity": 0,
         }
@@ -650,7 +655,7 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
             dtrain = xgb.DMatrix(X_tr, label=y_tr)
             dtest  = xgb.DMatrix(X_te, label=y_te)
 
-            callbacks = [xgb.callback.EarlyStopping(rounds=50, metric_name="val-mae")]
+            callbacks = [xgb.callback.EarlyStopping(rounds=50)]
             if _HAS_PRUNING:
                 callbacks.append(XGBoostPruningCallback(trial, "val-mae"))
 
@@ -658,6 +663,8 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
                 params, dtrain,
                 num_boost_round=1000,
                 obj=_asymmetric_obj,
+                custom_metric=_mae_feval,
+                maximize=False,
                 evals=[(dtest, "val")],
                 callbacks=callbacks,
                 verbose_eval=False,
@@ -730,7 +737,6 @@ def tune_and_train_shift_model(
         "reg_alpha":        best["reg_alpha"],
         "reg_lambda":       best["reg_lambda"],
         "gamma":            best["gamma"],
-        "eval_metric":      "mae",
         "seed": 42,
         "verbosity": 0,
     }
@@ -743,8 +749,10 @@ def tune_and_train_shift_model(
         xgb_params, dtrain,
         num_boost_round=1000,
         obj=_asymmetric_obj,
+        custom_metric=_mae_feval,
+        maximize=False,
         evals=[(dval, "val")],
-        callbacks=[xgb.callback.EarlyStopping(rounds=50, metric_name="val-mae")],
+        callbacks=[xgb.callback.EarlyStopping(rounds=50)],
         verbose_eval=False,
     )
     return bst, study.best_params, feat_avail
