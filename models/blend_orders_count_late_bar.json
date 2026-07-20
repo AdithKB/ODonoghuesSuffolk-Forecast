@@ -1,14 +1,7 @@
 {
-  "best_params": {
-    "max_leaves": 38,
-    "learning_rate": 0.14447746112718687,
-    "min_child_weight": 1,
-    "subsample": 0.7571172192068059,
-    "colsample_bytree": 0.7146901982034297,
-    "reg_alpha": 2.3528990899815284e-08,
-    "reg_lambda": 0.469835481586886,
-    "gamma": 0.8526206184364576
-  },
+  "xgb_weight": 0.0,
+  "lgbm_weight": 1.0,
+  "lgbm_quantile": 0.7,
   "feat_avail": [
     "orders_count_lag_24h",
     "orders_count_lag_48h",
@@ -108,5 +101,15 @@
     "budget_day_flag",
     "cheltenham_festival_flag",
     "sunny_afternoon"
-  ]
+  ],
+  "lgbm_best_params": {
+    "num_leaves": 182,
+    "learning_rate": 0.06106009387908144,
+    "min_data_in_leaf": 12,
+    "feature_fraction": 0.6200733234674957,
+    "bagging_fraction": 0.9659003485699852,
+    "reg_alpha": 3.8055997902411105e-07,
+    "reg_lambda": 0.1299992308357422,
+    "min_gain_to_split": 0.2872639664360932
+  }
 }

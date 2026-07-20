@@ -299,6 +299,12 @@ def fetch_airport_arrivals(save_path: Path | None = None) -> pd.DataFrame:
 
 DUBLIN_PORT_URL = "https://www.dublinport.ie/information-centre/next-100-arrivals/"
 
+# CruiseTimetables.com — correct URL slug format (year-specific pages)
+CRUISETIMETABLES_BASE = "https://www.cruisetimetables.com/dublin-ireland-cruise-ship-schedule-{year}.html"
+DUN_LAOGHAIRE_URL     = "https://www.cruisetimetables.com/dun-laoghaire-ireland-cruise-ship-schedule-{year}.html"
+# Current (no-year) page — lists upcoming season(s); used for forward-looking top-up
+CRUISETIMETABLES_CURRENT = "https://www.cruisetimetables.com/dublin-ireland-cruise-ship-schedule.html"
+
 # Known large passenger vessels (used to identify cruise ships vs cargo)
 CRUISE_KEYWORDS = [
     "CRUISE", "CELEBRITY", "ROYAL CARIBBEAN", "MSC ", "NORWEGIAN",
@@ -308,102 +314,168 @@ CRUISE_KEYWORDS = [
 ]
 
 
+_CT_MONTHS = {
+    "January": 1, "February": 2, "March": 3, "April": 4,
+    "May": 5, "June": 6, "July": 7, "August": 8,
+    "September": 9, "October": 10, "November": 11, "December": 12,
+}
+
+
+def _parse_ct_cell(text: str) -> list:
+    """
+    Parse a CruiseTimetables table cell.
+    Cell format (newline-separated):
+        Month YYYY
+        DD
+        DD
+        ...
+    Returns list of date objects.
+    """
+    import re, datetime as dt
+    dates, cur_m, cur_y = [], None, None
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(
+            r"^(January|February|March|April|May|June|July|August|"
+            r"September|October|November|December)\s+(\d{4})$", line
+        )
+        if m:
+            cur_m, cur_y = _CT_MONTHS[m.group(1)], int(m.group(2))
+            continue
+        if re.match(r"^\d{1,2}$", line) and cur_m and cur_y:
+            try:
+                dates.append(dt.date(cur_y, cur_m, int(line)))
+            except ValueError:
+                pass
+    return dates
+
+
+def _scrape_cruisetimetables(url: str) -> dict:
+    """
+    Scrape a cruisetimetables.com page and return {date: ship_count}.
+    Handles both the per-row format (older pages) and the cell-based monthly
+    calendar format used on year-specific slug pages.
+    """
+    cruise_dates: dict = {}
+    try:
+        resp = requests.get(url, timeout=REQUESTS_TIMEOUT, headers=REQUESTS_HEADERS)
+        resp.raise_for_status()
+    except Exception as e:
+        log.debug(f"cruisetimetables fetch failed ({url}): {e}")
+        return cruise_dates
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for table in soup.find_all("table"):
+        for td in table.find_all("td"):
+            cell_text = td.get_text("\n")
+            for d in _parse_ct_cell(cell_text):
+                cruise_dates[d] = cruise_dates.get(d, 0) + 1
+    return cruise_dates
+
+
 def fetch_cruise_schedule(
     save_path: Path | None = None,
     fallback_on_error: bool = True,
+    start_year: int = 2024,
 ) -> pd.DataFrame:
     """
-    Scrape Dublin Port next-100-arrivals page for cruise ship dates.
+    Build a historical + forward-looking cruise schedule for Dublin / Dun Laoghaire.
+
+    Strategy:
+    1. Load existing save_path CSV as historical base (pre-populated from
+       official DLRCOCO PDFs: data/pubdata/cruise_schedule_dublin.csv).
+    2. Top up with CruiseTimetables.com current-season page for future dates.
+    3. Merge: existing rows win for past dates; online data adds new future dates.
 
     Returns daily DataFrame:
         date, cruise_ship_flag, ships_in_port_count, cruise_passenger_estimate
     """
-    log.info(f"Scraping Dublin Port arrivals: {DUBLIN_PORT_URL}")
+    import datetime as dt
+    today = dt.date.today()
+    cruise_dates: dict = {}  # {date: ship_count}
+
+    # ── 1. Load existing historical CSV ────────────────────────────────────
+    historical_path = save_path or (RAW_DIR / "cruise_schedule.csv")
+    if Path(historical_path).exists():
+        hist = pd.read_csv(historical_path)
+        hist["date"] = pd.to_datetime(hist["date"]).dt.date
+        for _, row in hist.iterrows():
+            cruise_dates[row["date"]] = int(row.get("ships_in_port_count", 1))
+        log.info(f"Loaded {len(hist)} historical cruise dates from {historical_path}")
+
+    # ── 2. Top up with CruiseTimetables current-season page ────────────────
+    found_online = _scrape_cruisetimetables(CRUISETIMETABLES_CURRENT)
+    if not found_online:
+        # fall back to year-specific URL
+        for url_tpl in [CRUISETIMETABLES_BASE, DUN_LAOGHAIRE_URL]:
+            found_online.update(_scrape_cruisetimetables(url_tpl.format(year=today.year)))
+            found_online.update(_scrape_cruisetimetables(url_tpl.format(year=today.year + 1)))
+
+    for d, cnt in found_online.items():
+        if d > today:  # only add future dates from online source
+            cruise_dates[d] = max(cruise_dates.get(d, 0), cnt)
+
+    log.info(f"Online top-up: {sum(1 for d in found_online if d > today)} future cruise dates")
+
+    # ── 3. Dublin Port forward-looking (next 100 arrivals) ─────────────────
     try:
-        resp = requests.get(
-            DUBLIN_PORT_URL,
-            timeout=REQUESTS_TIMEOUT,
-            headers=REQUESTS_HEADERS,
-        )
+        resp = requests.get(DUBLIN_PORT_URL, timeout=REQUESTS_TIMEOUT, headers=REQUESTS_HEADERS)
         resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for table in soup.find_all("table"):
+            for tr in table.find_all("tr")[1:]:
+                cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                if len(cells) < 4:
+                    continue
+                vessel_type = str(cells[3]).strip().lower()
+                vessel_name = str(cells[2]).strip().upper() if len(cells) > 2 else ""
+                is_cruise = (
+                    "cruise" in vessel_type
+                    or any(kw in vessel_name for kw in CRUISE_KEYWORDS)
+                )
+                if not is_cruise:
+                    continue
+                try:
+                    parsed = pd.to_datetime(cells[0].strip(), dayfirst=True, errors="coerce")
+                    if pd.notna(parsed) and parsed.date() > today:
+                        d = parsed.date()
+                        cruise_dates[d] = cruise_dates.get(d, 0) + 1
+                except Exception:
+                    continue
     except Exception as e:
-        log.warning(f"Dublin Port scrape failed: {e}")
-        if fallback_on_error:
-            return pd.DataFrame(columns=["date","cruise_ship_flag","ships_in_port_count","cruise_passenger_estimate"])
-        raise
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Find the arrivals table — typically the first or only table on the page
-    tables = soup.find_all("table")
-    if not tables:
-        log.warning("No tables found on Dublin Port page — page structure may have changed.")
-        return pd.DataFrame(columns=["date","cruise_ship_flag","ships_in_port_count","cruise_passenger_estimate"])
-
-    rows = []
-    for table in tables:
-        for tr in table.find_all("tr")[1:]:  # skip header
-            cells = [td.get_text(strip=True) for td in tr.find_all(["td","th"])]
-            if not cells:
-                continue
-            rows.append(cells)
-
-    if not rows:
-        log.warning("No table rows extracted from Dublin Port page.")
-        return pd.DataFrame(columns=["date","cruise_ship_flag","ships_in_port_count","cruise_passenger_estimate"])
-
-    # Identify date and vessel columns
-    raw_df = pd.DataFrame(rows)
-    log.info(f"Scraped {len(raw_df)} rows, {len(raw_df.columns)} columns from Dublin Port.")
-
-    # Dublin Port table columns: Date | Time | Vessel | Vessel Type | Berth | From Location
-    # Cruise ships have Vessel Type = "Cruise Liners"
-    cruise_dates: dict[date, int] = {}
-
-    for _, row in raw_df.iterrows():
-        vals = list(row.values)
-        if len(vals) < 4:
-            continue
-
-        # Column 3 = Vessel Type (0-indexed)
-        vessel_type = str(vals[3]).strip().lower() if len(vals) > 3 else ""
-        vessel_name = str(vals[2]).strip().upper() if len(vals) > 2 else ""
-        is_cruise = (
-            "cruise" in vessel_type
-            or any(kw in vessel_name for kw in CRUISE_KEYWORDS)
-        )
-
-        # Column 0 = Date in DD/MM/YYYY format
-        arrival_date = None
-        date_str = str(vals[0]).strip()
-        try:
-            parsed = pd.to_datetime(date_str, dayfirst=True, errors="coerce")
-            if pd.notna(parsed):
-                arrival_date = parsed.date()
-        except Exception:
-            pass
-
-        if arrival_date and is_cruise:
-            cruise_dates[arrival_date] = cruise_dates.get(arrival_date, 0) + 1
+        log.debug(f"Dublin Port forward-looking scrape failed: {e}")
 
     if not cruise_dates:
-        log.info("No cruise ships identified. Returning empty schedule.")
+        log.warning("No cruise data found from any source.")
+        if not fallback_on_error:
+            raise RuntimeError("No cruise data found")
         return pd.DataFrame(columns=["date","cruise_ship_flag","ships_in_port_count","cruise_passenger_estimate"])
+
+    # Build final DataFrame — use actual pax estimate from historical where available
+    hist_pax: dict = {}
+    if Path(historical_path).exists():
+        hist_df = pd.read_csv(historical_path)
+        hist_df["date"] = pd.to_datetime(hist_df["date"]).dt.date
+        if "cruise_passenger_estimate" in hist_df.columns:
+            hist_pax = dict(zip(hist_df["date"], hist_df["cruise_passenger_estimate"]))
 
     records = []
     for d, count in sorted(cruise_dates.items()):
-        pax_estimate = count * 2500  # rough average passenger count per vessel
+        pax = hist_pax.get(d, count * 2000)
         records.append({
-            "date":                     d,
-            "cruise_ship_flag":         1,
-            "ships_in_port_count":      count,
-            "cruise_passenger_estimate": pax_estimate,
+            "date":                      d,
+            "cruise_ship_flag":          1,
+            "ships_in_port_count":       count,
+            "cruise_passenger_estimate": pax,
         })
 
     df = pd.DataFrame(records)
+    log.info(f"Total cruise days: {len(df)} across {df['date'].min()} → {df['date'].max()}")
     if save_path:
         df.to_csv(save_path, index=False)
-        log.info(f"Saved {len(df)} cruise days → {save_path}")
+        log.info(f"Saved → {save_path}")
     return df
 
 

@@ -449,7 +449,70 @@ def add_external_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     df["weekend_x_music"] = df["is_weekend"] * df.get("is_live_music_window", 0)
-    df["rain_x_weekend"] = df["rain_mm"] * df["is_weekend"] if "rain_mm" in df.columns else 0
+
+    # ── Improved rain features ────────────────────────────────────────────
+    # The raw hourly rain_mm captures rain during the visit hour itself —
+    # a poor signal because people decide to go out based on earlier conditions.
+    # We build three complementary features instead:
+    #
+    #  1. rainy_day_flag       — it rained meaningfully (>3mm) today at any point.
+    #                            Captures "people reduce going-out plans on wet days."
+    #  2. afternoon_rain_mm    — total rain 12:00–17:00, predicting evening decisions.
+    #                            Captures "people saw it raining; opted for the pub."
+    #  3. outdoor_weather_flag — clear, warm, sunny weekend afternoon: people may
+    #                            go to parks/outdoor venues instead of the pub.
+    #
+    # Keep rain_x_weekend as a legacy interaction for backwards compatibility.
+    if "rain_mm" in df.columns:
+        ts = pd.to_datetime(df["timestamp_hour"])
+        hour_col = ts.dt.hour
+        date_col = ts.dt.date
+
+        # Daily total rain — groupby date and broadcast back to hourly rows
+        rain_ser = df["rain_mm"].fillna(0)
+        daily_rain = (
+            pd.Series(rain_ser.values, index=pd.to_datetime(date_col))
+            .groupby(level=0).sum()
+        )
+        df["rainy_day_flag"] = pd.to_datetime(date_col).map(
+            daily_rain.__getitem__
+        ).ge(3.0).astype(int)
+
+        # Afternoon rain (12:00–17:00): average over those hours per date
+        aft_mask = hour_col.between(12, 17)
+        aft_rain_by_date = (
+            df.loc[aft_mask, ["timestamp_hour", "rain_mm"]]
+            .assign(date=pd.to_datetime(df.loc[aft_mask, "timestamp_hour"]).dt.date)
+            .groupby("date")["rain_mm"].mean()
+        )
+        # aft_rain_by_date index is datetime.date; map receives Timestamps — use .date()
+        df["afternoon_rain_mm"] = pd.to_datetime(date_col).map(
+            lambda d: aft_rain_by_date.get(d.date(), 0.0)
+        ).fillna(0.0)
+
+        # Legacy interaction (kept for model backward compat)
+        df["rain_x_weekend"] = rain_ser * df["is_weekend"]
+    else:
+        df["rainy_day_flag"]     = 0
+        df["afternoon_rain_mm"]  = 0.0
+        df["rain_x_weekend"]     = 0
+
+    # Outdoor weather flag: warm + sunny + weekend afternoon → people go outside
+    if "sunshine_duration_min" in df.columns and "temp_c" in df.columns:
+        ts = pd.to_datetime(df["timestamp_hour"])
+        hour_col = ts.dt.hour
+        df["sunny_afternoon"] = (
+            (df["sunshine_duration_min"] > 20) & (df["temp_c"] > 16)
+        ).astype(int)
+        # Specific outdoor-pull signal: prime outside hours on good weather
+        df["outdoor_weather_flag"] = (
+            df["sunny_afternoon"].astype(bool)
+            & df["is_weekend"].astype(bool)
+            & hour_col.between(13, 19)
+        ).astype(int)
+    else:
+        df["sunny_afternoon"]     = 0
+        df["outdoor_weather_flag"] = 0
 
     event_cols = [
         "bank_holiday_flag", "major_sports_event_flag",
@@ -463,12 +526,6 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
         df["tourism_pressure"] = (
             df["airport_arrivals_zscore"] + df["cruise_ship_flag"].astype(float)
         )
-
-    # Sunny afternoon boost: warm + sunshine = people stop for a pint
-    if "sunshine_duration_min" in df.columns and "temp_c" in df.columns:
-        df["sunny_afternoon"] = (
-            (df["sunshine_duration_min"] > 20) & (df["temp_c"] > 16)
-        ).astype(int)
 
     return df
 

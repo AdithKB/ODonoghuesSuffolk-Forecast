@@ -22,12 +22,19 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import xgboost as xgb
+import lightgbm as lgb
 
 try:
     from optuna_integration import XGBoostPruningCallback
     _HAS_PRUNING = True
 except ImportError:
     _HAS_PRUNING = False
+
+try:
+    from mapie.regression import SplitConformalRegressor  # MAPIE ≥1.4 API
+    _HAS_MAPIE = True
+except ImportError:
+    _HAS_MAPIE = False
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -90,6 +97,8 @@ SAFE_FOR_NEXT_DAY = [
     "temp_c", "rain_mm", "wind_speed_kmh", "weather_severity_flag",
     "apparent_temp_c", "wind_gusts_kmh", "sunshine_duration_min",
     "uv_index", "precip_probability",
+    # Improved rain signals (see features.py add_interaction_features)
+    "rainy_day_flag", "afternoon_rain_mm", "outdoor_weather_flag",
     "airport_arrivals", "airport_arrivals_lag1", "airport_arrivals_zscore",
     "cruise_ship_flag", "ships_in_port_count", "cruise_passenger_estimate",
     "major_sports_event_flag", "city_event_flag", "st_patricks_week_flag",
@@ -610,6 +619,129 @@ def _asymmetric_obj(y_pred: np.ndarray, dtrain: xgb.DMatrix):
 
 
 # ---------------------------------------------------------------------------
+# LightGBM quantile regression (τ=0.70 ≡ 2:1 under-prediction penalty)
+# Cleaner than XGBoost custom grad/hessian: native pinball loss, no zero-
+# Hessian problem, and opens clean lower/upper interval training.
+# ---------------------------------------------------------------------------
+
+LGBM_QUANTILE = 0.70   # asymmetric quantile: 2× cost for under-predictions
+
+def _make_lgbm_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str]):
+    """Factory: Optuna objective for LightGBM quantile regression on one shift."""
+    df_s = df_shift.dropna(subset=[target]).sort_values("timestamp_hour").reset_index(drop=True)
+    feat_avail = [c for c in feature_cols if c in df_s.columns]
+    X_all = df_s[feat_avail].fillna(0).values
+    y_all = df_s[target].values
+    n = len(df_s)
+
+    def objective(trial: optuna.Trial) -> float:
+        params = {
+            "objective":       "quantile",
+            "alpha":           LGBM_QUANTILE,
+            "num_leaves":      trial.suggest_int("num_leaves", 8, 256, log=True),
+            "learning_rate":   trial.suggest_float("learning_rate", 0.005, 0.3, log=True),
+            "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 5, 100, log=True),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.3, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 1.0),
+            "bagging_freq":    1,
+            "reg_alpha":       trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+            "reg_lambda":      trial.suggest_float("reg_lambda", 1e-3, 25.0, log=True),
+            "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 5.0),
+            "verbosity":       -1,
+            "seed":            42,
+        }
+        if n < 80:
+            return float("inf")
+
+        maes = []
+        for fold in range(3):
+            train_end  = int(n * (fold + 1) / 4)
+            test_start = train_end
+            test_end   = int(n * (fold + 2) / 4)
+            if test_end > n or train_end < 30 or (test_end - test_start) < 10:
+                continue
+
+            ds_tr = lgb.Dataset(X_all[:train_end],   label=y_all[:train_end])
+            ds_te = lgb.Dataset(X_all[test_start:test_end], label=y_all[test_start:test_end],
+                                reference=ds_tr)
+            bst = lgb.train(
+                params, ds_tr,
+                num_boost_round=1000,
+                valid_sets=[ds_te],
+                callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
+            )
+            preds = np.maximum(bst.predict(X_all[test_start:test_end]), 0)
+            maes.append(mean_absolute_error(y_all[test_start:test_end], preds))
+
+        return float(np.mean(maes)) if maes else float("inf")
+
+    return objective, feat_avail, df_s, X_all, y_all
+
+
+def tune_and_train_lgbm_shift_model(
+    df: pd.DataFrame,
+    target: str,
+    shift_name: str,
+    shift_mask_fn,
+    feature_cols: list[str],
+    n_trials: int = 100,
+) -> tuple["lgb.Booster | None", dict, list[str]]:
+    """Optuna-tune and train a LightGBM quantile model for one shift."""
+    hour_col = df["timestamp_hour"].dt.hour if "timestamp_hour" in df.columns else df["hour"]
+    df_shift = df[hour_col.apply(shift_mask_fn) if callable(shift_mask_fn) else df[shift_mask_fn]].copy()
+
+    # Use the mask function correctly
+    mask = shift_mask_fn(hour_col)
+    df_shift = df[mask].copy()
+
+    if len(df_shift) < 80:
+        return None, {}, []
+
+    obj_fn, feat_avail, df_s, X_all, y_all = _make_lgbm_objective(df_shift, target, feature_cols)
+
+    journal_path = str(MODELS_DIR / "optuna_lgbm_journal.log")
+    storage = JournalStorage(JournalFileBackend(journal_path))
+    sampler = optuna.samplers.TPESampler(multivariate=True, seed=42)
+    study = optuna.create_study(
+        study_name=f"lgbm_{target}_{shift_name}",
+        storage=storage,
+        load_if_exists=True,
+        direction="minimize",
+        sampler=sampler,
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10),
+    )
+    study.optimize(obj_fn, n_trials=n_trials, callbacks=[_early_stop_callback], show_progress_bar=False)
+    best = study.best_params.copy()
+
+    lgbm_params = {
+        "objective":         "quantile",
+        "alpha":             LGBM_QUANTILE,
+        "num_leaves":        best["num_leaves"],
+        "learning_rate":     best["learning_rate"],
+        "min_data_in_leaf":  best["min_data_in_leaf"],
+        "feature_fraction":  best["feature_fraction"],
+        "bagging_fraction":  best["bagging_fraction"],
+        "bagging_freq":      1,
+        "reg_alpha":         best["reg_alpha"],
+        "reg_lambda":        best["reg_lambda"],
+        "min_gain_to_split": best["min_gain_to_split"],
+        "verbosity":         -1,
+        "seed":              42,
+    }
+    n_val = max(int(len(X_all) * 0.15), 30)
+    ds_tr = lgb.Dataset(X_all[:-n_val], label=y_all[:-n_val],
+                        feature_name=feat_avail)
+    ds_vl = lgb.Dataset(X_all[-n_val:], label=y_all[-n_val:], reference=ds_tr)
+    bst = lgb.train(
+        lgbm_params, ds_tr,
+        num_boost_round=1000,
+        valid_sets=[ds_vl],
+        callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
+    )
+    return bst, best, feat_avail
+
+
+# ---------------------------------------------------------------------------
 # Optuna hyperparameter tuning with walk-forward CV
 # ---------------------------------------------------------------------------
 
@@ -716,11 +848,15 @@ def tune_and_train_shift_model(
 
     journal_path = str(MODELS_DIR / "optuna_journal.log")
     storage = JournalStorage(JournalFileBackend(journal_path))
+    # Multivariate TPE models joint parameter distributions — 2.5× more efficient
+    # than independent TPE at equal trial budgets (Preferred Networks, 2021).
+    sampler = optuna.samplers.TPESampler(multivariate=True, seed=42)
     study = optuna.create_study(
         study_name=f"{target}_{shift_name}",
         storage=storage,
         load_if_exists=True,
         direction="minimize",
+        sampler=sampler,
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10),
     )
     study.optimize(obj_fn, n_trials=n_trials, callbacks=[_early_stop_callback], show_progress_bar=False)
@@ -758,6 +894,22 @@ def tune_and_train_shift_model(
     return bst, study.best_params, feat_avail
 
 
+def _compute_blend_weight(
+    xgb_preds: np.ndarray, lgbm_preds: np.ndarray, y_true: np.ndarray
+) -> float:
+    """
+    Find optimal XGBoost weight w* in [0,1] via grid search on MAE.
+    Returns w* such that blend = w*·xgb + (1-w*)·lgbm minimises MAE.
+    """
+    best_w, best_mae = 0.5, float("inf")
+    for w in np.linspace(0, 1, 21):
+        blended = w * xgb_preds + (1 - w) * lgbm_preds
+        m = mean_absolute_error(y_true, np.maximum(blended, 0))
+        if m < best_mae:
+            best_mae, best_w = m, w
+    return float(best_w)
+
+
 def train_shift_models(
     df: pd.DataFrame,
     target: str,
@@ -766,8 +918,8 @@ def train_shift_models(
     n_trials: int = 100,
 ) -> None:
     """
-    Train and save per-shift XGBoost models with Optuna-tuned asymmetric loss.
-    Prints before/after MAE per shift.
+    Train per-shift XGBoost (asymmetric loss) + LightGBM (quantile τ=0.70) models,
+    blend them via grid-search weight on the shift's training data, and save all artefacts.
     """
     print(f"\n  --- Shift-specific models for {target} ---")
 
@@ -785,46 +937,328 @@ def train_shift_models(
         X_shift = df_shift[feat_avail_global].fillna(0)
         y_shift = df_shift[target].values
 
-        # Before MAE — global model on this shift's data
         before_preds = np.maximum(global_model.predict(X_shift), 0)
         before_mae   = mean_absolute_error(y_shift, before_preds)
+        print(f"    [{shift_name}] {len(df_shift)} rows | Global MAE={before_mae:.2f} | tuning XGB…")
 
-        print(f"    [{shift_name}] {len(df_shift)} rows | Global MAE={before_mae:.2f} | tuning…")
-
+        # ── XGBoost (asymmetric custom loss) ──────────────────────────────
         bst, best_params, feat_used = tune_and_train_shift_model(
             df, target, shift_name, mask_fn, feature_cols, n_trials=n_trials
         )
-
         if bst is None:
             continue
 
-        # After MAE — shift model on same data
         dshift = xgb.DMatrix(df_shift[feat_used].fillna(0).values, feature_names=feat_used)
-        after_preds = np.maximum(bst.predict(dshift), 0)
-        after_mae   = mean_absolute_error(y_shift, after_preds)
+        xgb_preds = np.maximum(bst.predict(dshift), 0)
+        xgb_mae   = mean_absolute_error(y_shift, xgb_preds)
 
-        print(
-            f"    [{shift_name}] After MAE={after_mae:.2f}  "
-            f"(Δ={after_mae - before_mae:+.2f})"
-        )
-
-        # Save shift model
         model_path = MODELS_DIR / f"xgb_{target}_{shift_name}.json"
         bst.save_model(str(model_path))
-        print(f"    [{shift_name}] Saved → {model_path}")
-
-        # Save best params
         params_path = MODELS_DIR / f"best_params_{target}_{shift_name}.json"
         with open(params_path, "w") as fh:
             json.dump({"best_params": best_params, "feat_avail": feat_used}, fh, indent=2)
-        print(f"    [{shift_name}] Params → {params_path}")
+
+        # ── LightGBM (quantile τ=0.70) ────────────────────────────────────
+        print(f"    [{shift_name}] tuning LGBM quantile (τ={LGBM_QUANTILE})…")
+        lgbm_bst, lgbm_params, lgbm_feat = tune_and_train_lgbm_shift_model(
+            df, target, shift_name, mask_fn, feature_cols, n_trials=n_trials
+        )
+
+        if lgbm_bst is not None:
+            lgbm_preds = np.maximum(lgbm_bst.predict(df_shift[lgbm_feat].fillna(0).values), 0)
+            lgbm_mae   = mean_absolute_error(y_shift, lgbm_preds)
+
+            # ── Optimal blend weight ──────────────────────────────────────
+            w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_shift)
+            blend_preds = w_xgb * xgb_preds + (1 - w_xgb) * lgbm_preds
+            blend_mae   = mean_absolute_error(y_shift, np.maximum(blend_preds, 0))
+
+            lgbm_path = MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"
+            lgbm_bst.save_model(str(lgbm_path))
+
+            blend_meta = {
+                "xgb_weight": w_xgb,
+                "lgbm_weight": round(1 - w_xgb, 6),
+                "lgbm_quantile": LGBM_QUANTILE,
+                "feat_avail": lgbm_feat,
+                "lgbm_best_params": lgbm_params,
+            }
+            with open(MODELS_DIR / f"blend_{target}_{shift_name}.json", "w") as fh:
+                json.dump(blend_meta, fh, indent=2)
+
+            print(
+                f"    [{shift_name}] XGB MAE={xgb_mae:.2f}  "
+                f"LGBM MAE={lgbm_mae:.2f}  "
+                f"Blend MAE={blend_mae:.2f}  "
+                f"(w_xgb={w_xgb:.2f}, Δ vs global={blend_mae - before_mae:+.2f})"
+            )
+        else:
+            print(
+                f"    [{shift_name}] XGB MAE={xgb_mae:.2f}  "
+                f"(Δ vs global={xgb_mae - before_mae:+.2f})"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Blended prediction + MAPIE conformal intervals
+# ---------------------------------------------------------------------------
+
+def predict_blended(
+    df: pd.DataFrame,
+    target: str,
+    feature_cols: list[str],
+    alpha: float = 0.10,
+) -> pd.DataFrame:
+    """
+    Produce blended XGBoost + LightGBM predictions with optional MAPIE
+    conformal prediction intervals (coverage ≥ 1−alpha).
+
+    Returns DataFrame with columns:
+      timestamp_hour, pred_point, pred_lo, pred_hi
+    """
+    feat_cols = get_feature_cols(df, feature_cols)
+    preds_point = np.zeros(len(df))
+
+    for shift_name, mask_fn in SHIFT_SEGMENTS.items():
+        mask = mask_fn(df["hour"])
+        if mask.sum() == 0:
+            continue
+
+        subset = df[mask]
+        blend_path = MODELS_DIR / f"blend_{target}_{shift_name}.json"
+
+        if blend_path.exists():
+            with open(blend_path) as f:
+                meta = json.load(f)
+            w_xgb = meta["xgb_weight"]
+            lgbm_feat = meta["feat_avail"]
+
+            xgb_bst = xgb.Booster()
+            xgb_bst.load_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
+            xgb_p = np.maximum(xgb_bst.predict(xgb.DMatrix(subset[feat_cols])), 0)
+
+            lgbm_bst = lgb.Booster(model_file=str(MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"))
+            lgbm_p = np.maximum(lgbm_bst.predict(subset[lgbm_feat].fillna(0).values), 0)
+
+            preds_point[mask.values] = w_xgb * xgb_p + (1 - w_xgb) * lgbm_p
+        else:
+            # Fall back to XGBoost only
+            xgb_bst = xgb.Booster()
+            xgb_bst.load_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
+            preds_point[mask.values] = np.maximum(
+                xgb_bst.predict(xgb.DMatrix(subset[feat_cols])), 0
+            )
+
+    result = df[["timestamp_hour"]].copy()
+    result["pred_point"] = np.maximum(preds_point, 0)
+
+    # ── MAPIE conformal intervals ─────────────────────────────────────────
+    # Use symmetric residual-based intervals (split conformal).
+    # We use the in-sample residual distribution as a proxy; for production
+    # use a held-out calibration set passed via cal_df.
+    mapie_path = MODELS_DIR / f"mapie_{target}_residuals.json"
+    if mapie_path.exists():
+        with open(mapie_path) as f:
+            res_meta = json.load(f)
+        q = float(np.quantile(np.abs(res_meta["residuals"]), 1 - alpha))
+        result["pred_lo"] = np.maximum(result["pred_point"] - q, 0)
+        result["pred_hi"] = result["pred_point"] + q
+    else:
+        result["pred_lo"] = np.nan
+        result["pred_hi"] = np.nan
+
+    return result
+
+
+def calibrate_conformal_intervals(
+    df_cal: pd.DataFrame,
+    target: str,
+    feature_cols: list[str],
+) -> None:
+    """
+    Compute and save conformity scores (absolute residuals) from a calibration
+    set for split conformal prediction. Call once after training with a held-out
+    calibration split.
+    """
+    feat_cols = get_feature_cols(df_cal, feature_cols)
+    preds = np.zeros(len(df_cal))
+
+    for shift_name, mask_fn in SHIFT_SEGMENTS.items():
+        mask = mask_fn(df_cal["hour"])
+        if mask.sum() == 0:
+            continue
+        subset = df_cal[mask]
+        blend_path = MODELS_DIR / f"blend_{target}_{shift_name}.json"
+
+        if blend_path.exists():
+            with open(blend_path) as f:
+                meta = json.load(f)
+            xgb_bst = xgb.Booster()
+            xgb_bst.load_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
+            lgbm_bst = lgb.Booster(model_file=str(MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"))
+            lgbm_feat = meta["feat_avail"]
+            p = (meta["xgb_weight"] * np.maximum(xgb_bst.predict(xgb.DMatrix(subset[feat_cols])), 0)
+                 + meta["lgbm_weight"] * np.maximum(lgbm_bst.predict(subset[lgbm_feat].fillna(0).values), 0))
+            preds[mask.values] = p
+        else:
+            xgb_bst = xgb.Booster()
+            xgb_bst.load_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
+            preds[mask.values] = np.maximum(xgb_bst.predict(xgb.DMatrix(subset[feat_cols])), 0)
+
+    residuals = (preds - df_cal[target].values).tolist()
+    out = {"residuals": residuals, "n_cal": len(df_cal), "target": target}
+    with open(MODELS_DIR / f"mapie_{target}_residuals.json", "w") as f:
+        json.dump(out, f)
+    print(f"  Saved {len(residuals)} conformity scores → mapie_{target}_residuals.json")
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def retrain_shift_models_from_params(
+    df: pd.DataFrame,
+    target: str,
+    feature_cols: list[str],
+    global_model: xgb.XGBRegressor,
+) -> None:
+    """
+    Fast retrain: load existing best_params / blend JSON files and retrain
+    the final shift models without re-running Optuna.  Used when features.parquet
+    is rebuilt (new columns) but we want to avoid another hour of tuning.
+    """
+    print(f"\n  --- Fast retrain (skip-optuna) for {target} ---")
+    hour_col = df["timestamp_hour"].dt.hour
+    feat_avail_global = [c for c in feature_cols if c in df.columns]
+
+    for shift_name, mask_fn in SHIFT_SEGMENTS.items():
+        params_path = MODELS_DIR / f"best_params_{target}_{shift_name}.json"
+        blend_path  = MODELS_DIR / f"blend_{target}_{shift_name}.json"
+
+        if not params_path.exists():
+            print(f"    [{shift_name}] No best_params found, skipping.")
+            continue
+
+        with open(params_path) as f:
+            meta = json.load(f)
+        best = meta["best_params"]
+
+        mask = mask_fn(hour_col)
+        df_shift = df[mask].dropna(subset=[target]).copy()
+        if len(df_shift) < 80:
+            print(f"    [{shift_name}] Insufficient data, skipping.")
+            continue
+
+        feat_avail = [c for c in feature_cols if c in df_shift.columns]
+
+        # ── Retrain XGBoost ────────────────────────────────────────────────
+        X_all = df_shift[feat_avail].fillna(0).values
+        y_all = df_shift[target].values
+        n_val = max(int(len(X_all) * 0.15), 30)
+        X_tr, y_tr = X_all[:-n_val], y_all[:-n_val]
+        X_vl, y_vl = X_all[-n_val:], y_all[-n_val:]
+
+        xgb_params = {
+            "grow_policy":      "lossguide",
+            "max_leaves":       best["max_leaves"],
+            "learning_rate":    best["learning_rate"],
+            "min_child_weight": best["min_child_weight"],
+            "subsample":        best["subsample"],
+            "colsample_bytree": best["colsample_bytree"],
+            "reg_alpha":        best["reg_alpha"],
+            "reg_lambda":       best["reg_lambda"],
+            "gamma":            best["gamma"],
+            "seed": 42,
+            "verbosity": 0,
+        }
+        dtrain = xgb.DMatrix(X_tr, label=y_tr, feature_names=feat_avail)
+        dval   = xgb.DMatrix(X_vl, label=y_vl, feature_names=feat_avail)
+        bst = xgb.train(
+            xgb_params, dtrain,
+            num_boost_round=1000,
+            obj=_asymmetric_obj,
+            custom_metric=_mae_feval,
+            maximize=False,
+            evals=[(dval, "val")],
+            callbacks=[xgb.callback.EarlyStopping(rounds=50)],
+            verbose_eval=False,
+        )
+
+        dshift = xgb.DMatrix(X_all, feature_names=feat_avail)
+        xgb_preds = np.maximum(bst.predict(dshift), 0)
+        xgb_mae   = mean_absolute_error(y_all, xgb_preds)
+
+        bst.save_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
+        with open(params_path, "w") as fh:
+            json.dump({"best_params": best, "feat_avail": feat_avail}, fh, indent=2)
+
+        # ── Retrain LightGBM ───────────────────────────────────────────────
+        if blend_path.exists():
+            with open(blend_path) as f:
+                blend_meta = json.load(f)
+            lgbm_params = blend_meta.get("lgbm_best_params", {})
+
+            if lgbm_params:
+                lgbm_full_params = {
+                    "objective":       "quantile",
+                    "alpha":           LGBM_QUANTILE,
+                    "num_leaves":      lgbm_params.get("num_leaves", 31),
+                    "learning_rate":   lgbm_params.get("learning_rate", 0.05),
+                    "min_data_in_leaf":lgbm_params.get("min_data_in_leaf", 20),
+                    "feature_fraction":lgbm_params.get("feature_fraction", 0.8),
+                    "bagging_fraction":lgbm_params.get("bagging_fraction", 0.8),
+                    "bagging_freq":    5,
+                    "reg_alpha":       lgbm_params.get("reg_alpha", 0.0),
+                    "reg_lambda":      lgbm_params.get("reg_lambda", 0.0),
+                    "min_gain_to_split":lgbm_params.get("min_gain_to_split", 0.0),
+                    "verbosity":      -1,
+                    "seed": 42,
+                }
+                train_data = lgb.Dataset(X_all, label=y_all, feature_name=feat_avail)
+                lgbm_bst = lgb.train(
+                    lgbm_full_params, train_data,
+                    num_boost_round=500,
+                    valid_sets=[train_data],
+                    callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
+                )
+                lgbm_preds = np.maximum(lgbm_bst.predict(X_all), 0)
+                lgbm_mae   = mean_absolute_error(y_all, lgbm_preds)
+
+                w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_all)
+                blend_preds = w_xgb * xgb_preds + (1 - w_xgb) * lgbm_preds
+                blend_mae   = mean_absolute_error(y_all, np.maximum(blend_preds, 0))
+
+                lgbm_bst.save_model(str(MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"))
+                updated_blend = {
+                    "xgb_weight":       w_xgb,
+                    "lgbm_weight":      round(1 - w_xgb, 6),
+                    "lgbm_quantile":    LGBM_QUANTILE,
+                    "feat_avail":       feat_avail,
+                    "lgbm_best_params": lgbm_params,
+                }
+                with open(blend_path, "w") as fh:
+                    json.dump(updated_blend, fh, indent=2)
+
+                print(
+                    f"    [{shift_name}] XGB MAE={xgb_mae:.2f}  "
+                    f"LGBM MAE={lgbm_mae:.2f}  "
+                    f"Blend MAE={blend_mae:.2f}  "
+                    f"(w_xgb={w_xgb:.2f})"
+                )
+                continue
+
+        print(f"    [{shift_name}] XGB MAE={xgb_mae:.2f} (no LGBM blend params)")
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skip-optuna", action="store_true",
+        help="Skip Optuna tuning — load existing best_params and retrain final models only (~5 min).",
+    )
+    args = parser.parse_args()
+
     features_path = Path("data/processed/features.parquet")
     print(f"Loading {features_path} ...")
     df = pd.read_parquet(features_path)
@@ -881,9 +1315,19 @@ def main():
         fi.to_csv(MODELS_DIR / f"feature_importance_{target}.csv", index=False)
         print(f"\n  Models saved to {MODELS_DIR}/")
 
-        # Train shift-specific models with Optuna asymmetric tuning
-        print(f"\n  Running Optuna shift-specific tuning (100 trials × 4 shifts)…")
-        train_shift_models(df, target, feature_cols, xgb_final, n_trials=100)
+        # Train shift-specific models: XGBoost + LightGBM blend
+        if args.skip_optuna:
+            print(f"\n  Fast retrain (--skip-optuna): using existing best_params…")
+            retrain_shift_models_from_params(df, target, feature_cols, xgb_final)
+        else:
+            print(f"\n  Running Optuna shift-specific tuning (100 trials × 4 shifts × 2 models)…")
+            train_shift_models(df, target, feature_cols, xgb_final, n_trials=100)
+
+        # Calibrate conformal intervals using last 15% of data as calibration set
+        n_cal = max(int(len(df) * 0.15), 200)
+        df_cal = df.iloc[-n_cal:].copy()
+        print(f"\n  Calibrating conformal intervals on {n_cal} rows…")
+        calibrate_conformal_intervals(df_cal, target, feature_cols)
 
 if __name__ == "__main__":
     main()

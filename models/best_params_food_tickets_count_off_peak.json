@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_leaves": 82,
-    "learning_rate": 0.28051682035850883,
-    "min_child_weight": 5,
-    "subsample": 0.9550827631272454,
-    "colsample_bytree": 0.9976926156188631,
-    "reg_alpha": 0.018845600733020797,
-    "reg_lambda": 0.2819752027827309,
-    "gamma": 0.5664378111414272
+    "max_leaves": 107,
+    "learning_rate": 0.2446581992813428,
+    "min_child_weight": 1,
+    "subsample": 0.6673006595488689,
+    "colsample_bytree": 0.848671531061921,
+    "reg_alpha": 6.121997004708135e-08,
+    "reg_lambda": 0.6020853255292105,
+    "gamma": 0.24314564933238292
   },
   "feat_avail": [
     "orders_count_lag_24h",
@@ -55,6 +55,9 @@
     "sunshine_duration_min",
     "uv_index",
     "precip_probability",
+    "rainy_day_flag",
+    "afternoon_rain_mm",
+    "outdoor_weather_flag",
     "airport_arrivals",
     "airport_arrivals_lag1",
     "airport_arrivals_zscore",

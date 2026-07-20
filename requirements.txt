@@ -16,4 +16,6 @@ pyarrow>=15.0
 streamlit-autorefresh>=0.0.1
 optuna>=3.0
 optuna-integration[xgboost]>=0.0.1
+lightgbm>=4.0
+mapie>=1.4
 python-dotenv>=1.0
