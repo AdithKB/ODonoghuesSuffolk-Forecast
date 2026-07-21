@@ -173,7 +173,7 @@ def add_venue_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Live music window — keep the flag from raw data if present, else derive
     if "live_music_flag" in df.columns:
-        df["is_live_music_window"] = df["live_music_flag"].astype(int)
+        df["is_live_music_window"] = df["live_music_flag"].fillna(0).astype(int)
     else:
         wd = df["timestamp_hour"].dt.weekday
         is_fri_sat = wd.isin([4, 5])
@@ -664,7 +664,12 @@ def build_features(
     if drop_na:
         lag_cols = [c for c in df.columns if "_lag_" in c or "_roll_" in c]
         before = len(df)
-        df = df.dropna(subset=lag_cols).reset_index(drop=True)
+        # Keep future forecast rows (NaN targets) regardless of lag NaNs —
+        # they need to stay for dashboard predictions. Only drop historical
+        # warm-up rows (which have real targets but missing lags).
+        has_target = df[[t for t in (targets or []) if t in df.columns]].notna().any(axis=1)
+        drop_mask = has_target & df[lag_cols].isna().any(axis=1)
+        df = df[~drop_mask].reset_index(drop=True)
         dropped = before - len(df)
         if dropped:
             print(f"Dropped {dropped} warm-up rows (lag/rolling NaN).")
@@ -689,6 +694,9 @@ def get_feature_columns(df: pd.DataFrame, targets: list[str]) -> list[str]:
 # CLI entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    import numpy as np
+    from datetime import timedelta as _timedelta
+
     raw_path = Path("data/synthetic/odonoghues_hourly.csv")
     out_path = Path("data/processed/features.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -696,6 +704,20 @@ if __name__ == "__main__":
     print(f"Loading {raw_path} ...")
     raw = pd.read_csv(raw_path)
     print(f"  Raw shape: {raw.shape}")
+
+    last_date = pd.to_datetime(raw["timestamp_hour"]).max().date()
+    open_hours = list(range(9, 24)) + [0, 1]
+    future_stubs = [
+        {
+            "timestamp_hour": pd.Timestamp(last_date + _timedelta(days=d)) + pd.Timedelta(hours=h),
+            "orders_count": np.nan,
+            "food_tickets_count": np.nan,
+        }
+        for d in range(1, 8)
+        for h in open_hours
+    ]
+    raw = pd.concat([raw, pd.DataFrame(future_stubs)], ignore_index=True)
+    print(f"  Extended with {len(future_stubs)} future stubs → {len(raw):,} total rows")
 
     df = build_features(raw)
     df.to_parquet(out_path, index=False)

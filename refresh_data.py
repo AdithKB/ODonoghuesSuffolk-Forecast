@@ -108,14 +108,36 @@ def main():
 
     # 3. Rebuild feature table
     step("3/3  Rebuilding feature table…")
+    import numpy as np
     import pandas as pd
+    from datetime import timedelta
     from src.features import build_features
 
     raw_path = ROOT / "data/synthetic/odonoghues_hourly.csv"
     raw = pd.read_csv(raw_path)
-    df = build_features(raw)
+
+    # Append 7 days of future stub rows so the enrichment join (weather forecast,
+    # sports fixtures, cruise schedule) populates real signals for upcoming dates.
+    # Lag features compute correctly because they look back into real history.
+    last_date = pd.to_datetime(raw["timestamp_hour"]).max().date()
+    open_hours = list(range(9, 24)) + [0, 1]
+    future_stubs = [
+        {
+            "timestamp_hour": pd.Timestamp(last_date + timedelta(days=d)) + pd.Timedelta(hours=h),
+            "orders_count": np.nan,
+            "food_tickets_count": np.nan,
+        }
+        for d in range(1, 8)
+        for h in open_hours
+    ]
+    raw_extended = pd.concat([raw, pd.DataFrame(future_stubs)], ignore_index=True)
+    print(f"     Raw rows: {len(raw):,}  +  {len(future_stubs)} future stubs → {len(raw_extended):,} total")
+
+    df = build_features(raw_extended)
     df.to_parquet(ROOT / "data/processed/features.parquet", index=False)
-    print(f"     Features: {df.shape[0]:,} rows × {df.shape[1]} cols")
+    hist_rows = df["orders_count"].notna().sum()
+    fut_rows  = df["orders_count"].isna().sum()
+    print(f"     Features: {hist_rows:,} historical + {fut_rows} forecast rows × {df.shape[1]} cols")
     print("     Saved → data/processed/features.parquet")
 
     # 4. Optional retrain
