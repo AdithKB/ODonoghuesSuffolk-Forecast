@@ -443,14 +443,14 @@ def _predict_with_shift_routing(
     handled = np.zeros(len(X), dtype=bool)
     for shift_name, bst in shift_models.items():
         mask_fn = SHIFT_SEGMENTS[shift_name]
-        mask = mask_fn(X).values  # X is a DataFrame with "hour"/"weekday" cols
-        if not mask.any():
+        idx = np.where(mask_fn(X).values)[0]
+        if len(idx) == 0:
             continue
         # Align to the feature set the booster was trained on
-        X_sub = X[mask].reindex(columns=bst.feature_names, fill_value=0)
+        X_sub = X.iloc[idx].reindex(columns=bst.feature_names, fill_value=0)
         dmat = xgb.DMatrix(X_sub)
-        preds[mask] = np.maximum(bst.predict(dmat), 0)
-        handled |= mask
+        preds[idx] = np.maximum(bst.predict(dmat), 0).ravel()
+        handled[idx] = True
 
     # Fall back to global model for any un-handled hours
     if (~handled).any():
