@@ -446,7 +446,9 @@ def _predict_with_shift_routing(
         mask = mask_fn(X).values  # X is a DataFrame with "hour"/"weekday" cols
         if not mask.any():
             continue
-        dmat = xgb.DMatrix(X[mask].values, feature_names=feat_cols)
+        # Align to the feature set the booster was trained on
+        X_sub = X[mask].reindex(columns=bst.feature_names, fill_value=0)
+        dmat = xgb.DMatrix(X_sub)
         preds[mask] = np.maximum(bst.predict(dmat), 0)
         handled |= mask
 
