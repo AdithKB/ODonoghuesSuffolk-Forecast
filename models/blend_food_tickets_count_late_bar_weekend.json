@@ -60,7 +60,6 @@
     "major_sports_event_flag",
     "city_event_flag",
     "st_patricks_week_flag",
-    "special_event_flag",
     "event_intensity",
     "tourism_pressure",
     "weekend_x_music",
@@ -85,6 +84,8 @@
     "suffolk_footfall_roll_24h",
     "orders_count_same_slot_4w_avg",
     "food_tickets_count_same_slot_4w_avg",
+    "orders_count_same_wd_hour_roll8",
+    "food_tickets_count_same_wd_hour_roll8",
     "tv_sports_flag",
     "tv_sports_intensity",
     "match_kickoff_proximity",
@@ -100,7 +101,14 @@
     "is_after_work_window",
     "budget_day_flag",
     "cheltenham_festival_flag",
-    "sunny_afternoon"
+    "sunny_afternoon",
+    "late_night_x_fri_sat",
+    "orders_count_trend_90d",
+    "orders_count_yoy_ratio",
+    "food_tickets_count_trend_90d",
+    "food_tickets_count_yoy_ratio",
+    "orders_count_ewma_168",
+    "food_tickets_count_ewma_168"
   ],
   "lgbm_best_params": {
     "num_leaves": 28,

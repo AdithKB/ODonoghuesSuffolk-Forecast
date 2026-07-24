@@ -111,13 +111,13 @@
     "food_tickets_count_ewma_168"
   ],
   "lgbm_best_params": {
-    "num_leaves": 36,
-    "learning_rate": 0.13988552805662832,
-    "min_data_in_leaf": 9,
-    "feature_fraction": 0.3450600458901964,
-    "bagging_fraction": 0.8280159648235629,
-    "reg_alpha": 7.732187865966074e-08,
-    "reg_lambda": 7.321774167057362,
-    "min_gain_to_split": 0.010268414710893839
+    "num_leaves": 29,
+    "learning_rate": 0.03527409549857312,
+    "min_data_in_leaf": 19,
+    "feature_fraction": 0.9671613207886693,
+    "bagging_fraction": 0.820846410528361,
+    "reg_alpha": 4.818390589124936e-07,
+    "reg_lambda": 0.05926075963303896,
+    "min_gain_to_split": 0.4745894070455353
   }
 }

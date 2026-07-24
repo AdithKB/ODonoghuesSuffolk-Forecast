@@ -1,13 +1,13 @@
 {
   "best_params": {
-    "max_leaves": 32,
-    "learning_rate": 0.2475060240190662,
-    "min_child_weight": 3,
-    "subsample": 0.7369067982029454,
-    "colsample_bytree": 0.4821684571531197,
-    "reg_alpha": 7.790753245493356e-05,
-    "reg_lambda": 2.087322666244769,
-    "gamma": 4.881494312795004
+    "max_leaves": 51,
+    "learning_rate": 0.17717980474426612,
+    "min_child_weight": 28,
+    "subsample": 0.9944638233792806,
+    "colsample_bytree": 0.8883137895215638,
+    "reg_alpha": 3.148372946426683e-07,
+    "reg_lambda": 8.426885921359398,
+    "gamma": 1.130747639320683
   },
   "feat_avail": [
     "orders_count_lag_24h",
@@ -67,7 +67,6 @@
     "major_sports_event_flag",
     "city_event_flag",
     "st_patricks_week_flag",
-    "special_event_flag",
     "event_intensity",
     "tourism_pressure",
     "weekend_x_music",
@@ -92,6 +91,8 @@
     "suffolk_footfall_roll_24h",
     "orders_count_same_slot_4w_avg",
     "food_tickets_count_same_slot_4w_avg",
+    "orders_count_same_wd_hour_roll8",
+    "food_tickets_count_same_wd_hour_roll8",
     "tv_sports_flag",
     "tv_sports_intensity",
     "match_kickoff_proximity",
@@ -107,6 +108,13 @@
     "is_after_work_window",
     "budget_day_flag",
     "cheltenham_festival_flag",
-    "sunny_afternoon"
+    "sunny_afternoon",
+    "late_night_x_fri_sat",
+    "orders_count_trend_90d",
+    "orders_count_yoy_ratio",
+    "food_tickets_count_trend_90d",
+    "food_tickets_count_yoy_ratio",
+    "orders_count_ewma_168",
+    "food_tickets_count_ewma_168"
   ]
 }

@@ -106,6 +106,64 @@ def add_lag_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
         stacked = np.vstack(week_lags).T  # (n_rows, 4)
         df[col_name] = np.nanmean(stacked, axis=1)
 
+    # Same-weekday same-hour rolling average over last 8 occurrences.
+    # Conditions on (weekday, hour) so Thursday 1pm only averages previous
+    # Thursdays at 1pm — much tighter baseline than same_slot_4w_avg.
+    wd_col = f"{target}_same_wd_hour_roll8"
+    if wd_col not in df.columns:
+        _wd = df["timestamp_hour"].dt.weekday
+        _h  = df["timestamp_hour"].dt.hour
+        df[wd_col] = (
+            df.groupby([_wd, _h])[target]
+            .transform(lambda x: x.shift(1).rolling(8, min_periods=2).mean())
+        )
+
+    return df
+
+
+def add_ewma_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
+    """
+    Exponential Weighted Moving Averages — discount older obs naturally.
+    Computed on shift(1) series so window ends at T-1 (no leakage).
+    Better than simple rolling means for capturing momentum in demand.
+    """
+    s = df[target]
+    for span, label in [(6, "ewma_6"), (24, "ewma_24"), (168, "ewma_168")]:
+        df[f"{target}_{label}"] = s.shift(1).ewm(span=span, min_periods=1).mean()
+    return df
+
+
+def add_trend_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
+    """
+    Long-horizon trend features computed on daily totals then broadcast to hours.
+    Daily aggregation avoids dead-hour (2–8am near-zero) dilution.
+
+    - trend_90d : 90-day rolling mean of daily totals (captures seasonal arc)
+    - yoy_ratio : 28-day rolling avg / same window 364 days ago (growth signal)
+    """
+    ts = pd.to_datetime(df["timestamp_hour"])
+    date_idx = pd.to_datetime(ts.dt.date)
+
+    daily = (
+        pd.Series(df[target].values, index=date_idx)
+        .groupby(level=0).sum()
+        .sort_index()
+    )
+
+    # 90-day rolling mean on daily totals, shift by 1 day, min 14 days of data
+    roll90 = daily.shift(1).rolling(90, min_periods=14).mean().fillna(0.0)
+
+    # YoY: 28-day avg divided by same 28-day window 364 days prior
+    roll28      = daily.shift(1).rolling(28, min_periods=7).mean()
+    roll28_1y   = roll28.shift(364)
+    yoy         = (roll28 / roll28_1y.replace(0.0, np.nan)).clip(0.3, 3.0).fillna(1.0)
+
+    roll90_map = roll90.to_dict()
+    yoy_map    = yoy.to_dict()
+
+    df[f"{target}_trend_90d"] = date_idx.map(roll90_map).fillna(0.0).astype(float)
+    df[f"{target}_yoy_ratio"]  = date_idx.map(yoy_map).fillna(1.0).astype(float)
+
     return df
 
 
@@ -228,10 +286,9 @@ def add_schedule_features(df: pd.DataFrame) -> pd.DataFrame:
     # rag_week_flag: approx third week of February (Feb 14–22)
     df["rag_week_flag"] = ((m == 2) & day.between(14, 22)).astype(int)
 
-    # exam_period_flag: late Nov–Dec + May
-    df["exam_period_flag"] = (
-        ((m == 11) & (day >= 20)) | (m == 12) | (m == 5)
-    ).astype(int)
+    # exam_period_flag: May only (Trinity summer exams)
+    # Nov–Dec was previously included but is confounded with Christmas market season
+    df["exam_period_flag"] = (m == 5).astype(int)
 
     # is_business_lunch_hour: weekday 12–13, not bank holiday
     bank_hol = df.get("bank_holiday_flag", pd.Series(0, index=df.index))
@@ -527,7 +584,46 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
             df["airport_arrivals_zscore"] + df["cruise_ship_flag"].astype(float)
         )
 
+    # Late-night × Fri/Sat: Friday and Saturday nights are an entirely different
+    # demand curve to weekday late nights — explicit interaction captures this.
+    h = pd.to_datetime(df["timestamp_hour"]).dt.hour
+    is_late_night = ((h >= 21) | (h <= 2)).astype(int)
+    fri_sat = df.get("is_friday_saturday", pd.Series(0, index=df.index))
+    df["late_night_x_fri_sat"] = is_late_night * fri_sat.astype(int)
+
     return df
+
+
+# ---------------------------------------------------------------------------
+# Busyness tier — weekday-adjusted, calibrated on 938 days of Titan POS data
+# ---------------------------------------------------------------------------
+
+# Thresholds: (quiet_max, normal_max, busy_max); above busy_max = Slammed
+# Based on p33/p67/p90 of daily open-hour totals per weekday
+_BUSYNESS_THRESHOLDS = {
+    0: (452,  614,  800),   # Mon
+    1: (450,  581,  722),   # Tue
+    2: (445,  578,  741),   # Wed
+    3: (658,  822, 1052),   # Thu
+    4: (1060, 1248, 1446),  # Fri
+    5: (1454, 1692, 1946),  # Sat
+    6: (735,  948, 1324),   # Sun
+}
+
+def label_busyness(predicted_daily_total: float, weekday: int) -> str:
+    """
+    Return a busyness tier for a predicted daily total on a given weekday (0=Mon, 6=Sun).
+    Tiers: Quiet / Normal / Busy / Slammed — calibrated to historical p33/p67/p90 per weekday.
+    """
+    q, n, b = _BUSYNESS_THRESHOLDS[weekday % 7]
+    if predicted_daily_total < q:
+        return "Quiet"
+    elif predicted_daily_total < n:
+        return "Normal"
+    elif predicted_daily_total < b:
+        return "Busy"
+    else:
+        return "Slammed"
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +750,8 @@ def build_features(
             continue
         df = add_lag_features(df, target)
         df = add_rolling_features(df, target)
+        df = add_ewma_features(df, target)
+        df = add_trend_features(df, target)
 
     df = add_calendar_features(df, holiday_set)
     df = add_venue_features(df)
@@ -694,19 +792,22 @@ def get_feature_columns(df: pd.DataFrame, targets: list[str]) -> list[str]:
 # CLI entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    import sys
     import numpy as np
     from datetime import timedelta as _timedelta
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from src.ingest_titan import build_titan_dataset
 
-    raw_path = Path("data/synthetic/odonoghues_hourly.csv")
+    titan_dir = Path("data/raw/pos_titanbi")
     out_path = Path("data/processed/features.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading {raw_path} ...")
-    raw = pd.read_csv(raw_path)
+    print(f"Loading Titan POS data from {titan_dir} ...")
+    raw = build_titan_dataset(titan_dir, verbose=True)
     print(f"  Raw shape: {raw.shape}")
 
     last_date = pd.to_datetime(raw["timestamp_hour"]).max().date()
-    open_hours = list(range(9, 24)) + [0, 1]
+    open_hours = list(range(9, 24)) + [0, 1, 2]
     future_stubs = [
         {
             "timestamp_hour": pd.Timestamp(last_date + _timedelta(days=d)) + pd.Timedelta(hours=h),

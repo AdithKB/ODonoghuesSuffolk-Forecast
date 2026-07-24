@@ -1,7 +1,14 @@
 {
-  "xgb_weight": 1.0,
-  "lgbm_weight": 0.0,
-  "lgbm_quantile": 0.7,
+  "best_params": {
+    "max_leaves": 26,
+    "learning_rate": 0.2894928385794051,
+    "min_child_weight": 6,
+    "subsample": 0.9759863269523018,
+    "colsample_bytree": 0.46623884049396164,
+    "reg_alpha": 1.0882779509139103e-08,
+    "reg_lambda": 4.596645396116666,
+    "gamma": 2.702891751295651
+  },
   "feat_avail": [
     "orders_count_lag_24h",
     "orders_count_lag_48h",
@@ -109,15 +116,5 @@
     "food_tickets_count_yoy_ratio",
     "orders_count_ewma_168",
     "food_tickets_count_ewma_168"
-  ],
-  "lgbm_best_params": {
-    "num_leaves": 36,
-    "learning_rate": 0.13988552805662832,
-    "min_data_in_leaf": 9,
-    "feature_fraction": 0.3450600458901964,
-    "bagging_fraction": 0.8280159648235629,
-    "reg_alpha": 7.732187865966074e-08,
-    "reg_lambda": 7.321774167057362,
-    "min_gain_to_split": 0.010268414710893839
-  }
+  ]
 }

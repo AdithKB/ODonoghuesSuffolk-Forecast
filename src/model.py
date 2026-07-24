@@ -53,22 +53,42 @@ SHIFTS = [
 ]
 
 # Shift segments for per-shift model training
+def _late_weekend(df: pd.DataFrame) -> pd.Series:
+    """Fri/Sat late-bar rows: Fri 21-23 + Sat 00-02 + Sat 21-23 + Sun 00-02."""
+    h = df["hour"] if "hour" in df.columns else df["timestamp_hour"].dt.hour
+    wd = df["weekday"] if "weekday" in df.columns else pd.to_datetime(df["timestamp_hour"]).dt.weekday
+    return ((h >= 21) & wd.isin([4, 5])) | ((h <= 2) & wd.isin([5, 6]))
+
+def _late_weekday(df: pd.DataFrame) -> pd.Series:
+    """Mon-Thu/Sun late-bar rows."""
+    h = df["hour"] if "hour" in df.columns else df["timestamp_hour"].dt.hour
+    wd = df["weekday"] if "weekday" in df.columns else pd.to_datetime(df["timestamp_hour"]).dt.weekday
+    return ((h >= 21) & ~wd.isin([4, 5])) | ((h <= 2) & ~wd.isin([5, 6]))
+
+# Each mask function takes the full DataFrame and returns a boolean Series.
+# late_bar is split into weekend (Fri/Sat nights) and weekday (all other nights)
+# because Fri midnight can see 10× more orders than Tue midnight.
 SHIFT_SEGMENTS = {
-    "lunch":    lambda h: (h >= 12) & (h <= 15),
-    "evening":  lambda h: (h >= 17) & (h <= 20),
-    "late_bar": lambda h: (h >= 21) | (h <= 2),
-    "off_peak": lambda h: ((h >= 9) & (h <= 11)) | (h == 16),
+    "lunch":            lambda df: (df["hour"] >= 12) & (df["hour"] <= 15),
+    "evening":          lambda df: (df["hour"] >= 17) & (df["hour"] <= 20),
+    "late_bar_weekend": _late_weekend,
+    "late_bar_weekday": _late_weekday,
+    "off_peak":         lambda df: ((df["hour"] >= 9) & (df["hour"] <= 11)) | (df["hour"] == 16),
 }
 
 
-def get_hour_shift(hour: int) -> str:
-    """Map a single hour value to its shift bucket name."""
+def get_hour_shift(hour: int, weekday: int = -1) -> str:
+    """Map hour (and optionally weekday) to shift bucket name."""
     if 12 <= hour <= 15:
         return "lunch"
     if 17 <= hour <= 20:
         return "evening"
     if hour >= 21 or hour <= 2:
-        return "late_bar"
+        if weekday in (4, 5) and hour >= 21:
+            return "late_bar_weekend"
+        if weekday in (5, 6) and hour <= 2:
+            return "late_bar_weekend"
+        return "late_bar_weekday"
     return "off_peak"
 
 # Busy-label thresholds (percentile of training shift totals per shift type)
@@ -117,6 +137,10 @@ SAFE_FOR_NEXT_DAY = [
     # Same-slot seasonal averages (4-week lookback, no same-day leakage)
     "orders_count_same_slot_4w_avg",
     "food_tickets_count_same_slot_4w_avg",
+    # Same-weekday same-hour rolling avg (last 8 occurrences of that weekday+hour)
+    # Tighter baseline than same_slot_4w_avg — Thu 1pm only averages Thursdays at 1pm
+    "orders_count_same_wd_hour_roll8",
+    "food_tickets_count_same_wd_hour_roll8",
     # TV sports signal (from fetch_sports.py fixtures — known ahead of match day)
     "tv_sports_flag", "tv_sports_intensity",
     "match_kickoff_proximity", "is_ireland_match_window",
@@ -128,12 +152,21 @@ SAFE_FOR_NEXT_DAY = [
     "budget_day_flag", "cheltenham_festival_flag",
     # Interaction features
     "sunny_afternoon",
+    "late_night_x_fri_sat",
+    # Long-horizon trend (90-day rolling + year-over-year ratio)
+    "orders_count_trend_90d", "orders_count_yoy_ratio",
+    "food_tickets_count_trend_90d", "food_tickets_count_yoy_ratio",
+    # EWMA 168h (1-week span) — safe for next-day, discounts older obs
+    "orders_count_ewma_168", "food_tickets_count_ewma_168",
 ]
 
 # Full feature set (adds intra-day lags — usable for same-day nowcasting)
 FULL_FEATURES = SAFE_FOR_NEXT_DAY + [
     "orders_count_lag_1", "orders_count_lag_2", "orders_count_lag_3",
     "food_tickets_count_lag_1", "food_tickets_count_lag_2", "food_tickets_count_lag_3",
+    # EWMA short spans (need recent hours — intra-day only)
+    "orders_count_ewma_6", "orders_count_ewma_24",
+    "food_tickets_count_ewma_6", "food_tickets_count_ewma_24",
     "orders_count_roll_mean_3", "orders_count_roll_mean_6", "orders_count_roll_mean_12",
     "food_tickets_count_roll_mean_3", "food_tickets_count_roll_mean_6",
     # Current-hour footfall (usable intra-day when counter data is available)
@@ -193,19 +226,11 @@ def assign_shift_labels(
     thresholds: dict with keys 'quiet', 'normal', 'busy' as percentile values
                 derived from training data shift totals.
     """
-    h = df["hour"] if "hour" in df.columns else df["timestamp_hour"].dt.hour
-
-    # Lunch (12-14)
-    lunch_mask = h.between(12, 14)
-    # Dinner (17-20)
-    dinner_mask = h.between(17, 20)
-    # Late bar (21-23 + 0-1)
-    late_mask = (h >= 21) | (h <= 1)
-
     shift_col = pd.Series("none", index=df.index)
-    shift_col[lunch_mask] = "lunch"
-    shift_col[dinner_mask] = "dinner"
-    shift_col[late_mask] = "late_bar"
+    shift_col[SHIFT_SEGMENTS["lunch"](df)]            = "lunch"
+    shift_col[SHIFT_SEGMENTS["evening"](df)]          = "dinner"
+    shift_col[SHIFT_SEGMENTS["late_bar_weekend"](df)] = "late_bar_weekend"
+    shift_col[SHIFT_SEGMENTS["late_bar_weekday"](df)] = "late_bar_weekday"
     return shift_col
 
 
@@ -626,7 +651,7 @@ def _asymmetric_obj(y_pred: np.ndarray, dtrain: xgb.DMatrix):
 
 LGBM_QUANTILE = 0.70   # asymmetric quantile: 2× cost for under-predictions
 
-def _make_lgbm_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str]):
+def _make_lgbm_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str], num_threads: int = 0):
     """Factory: Optuna objective for LightGBM quantile regression on one shift."""
     df_s = df_shift.dropna(subset=[target]).sort_values("timestamp_hour").reset_index(drop=True)
     feat_avail = [c for c in feature_cols if c in df_s.columns]
@@ -649,6 +674,7 @@ def _make_lgbm_objective(df_shift: pd.DataFrame, target: str, feature_cols: list
             "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 5.0),
             "verbosity":       -1,
             "seed":            42,
+            "num_threads":     num_threads,
         }
         if n < 80:
             return float("inf")
@@ -685,19 +711,19 @@ def tune_and_train_lgbm_shift_model(
     shift_mask_fn,
     feature_cols: list[str],
     n_trials: int = 100,
+    num_threads: int = 0,
 ) -> tuple["lgb.Booster | None", dict, list[str]]:
-    """Optuna-tune and train a LightGBM quantile model for one shift."""
-    hour_col = df["timestamp_hour"].dt.hour if "timestamp_hour" in df.columns else df["hour"]
-    df_shift = df[hour_col.apply(shift_mask_fn) if callable(shift_mask_fn) else df[shift_mask_fn]].copy()
+    """Optuna-tune and train a LightGBM quantile model for one shift.
 
-    # Use the mask function correctly
-    mask = shift_mask_fn(hour_col)
+    Set num_threads=1 when running multiple studies in parallel to avoid OpenMP contention.
+    """
+    mask = shift_mask_fn(df)
     df_shift = df[mask].copy()
 
     if len(df_shift) < 80:
         return None, {}, []
 
-    obj_fn, feat_avail, df_s, X_all, y_all = _make_lgbm_objective(df_shift, target, feature_cols)
+    obj_fn, feat_avail, df_s, X_all, y_all = _make_lgbm_objective(df_shift, target, feature_cols, num_threads=num_threads)
 
     journal_path = str(MODELS_DIR / "optuna_lgbm_journal.log")
     storage = JournalStorage(JournalFileBackend(journal_path))
@@ -727,6 +753,7 @@ def tune_and_train_lgbm_shift_model(
         "min_gain_to_split": best["min_gain_to_split"],
         "verbosity":         -1,
         "seed":              42,
+        "num_threads":       num_threads,
     }
     n_val = max(int(len(X_all) * 0.15), 30)
     ds_tr = lgb.Dataset(X_all[:-n_val], label=y_all[:-n_val],
@@ -745,7 +772,7 @@ def tune_and_train_lgbm_shift_model(
 # Optuna hyperparameter tuning with walk-forward CV
 # ---------------------------------------------------------------------------
 
-def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str]):
+def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: list[str], nthread: int = 0):
     """Factory: returns an Optuna objective closure for a specific shift+target."""
 
     df_s = df_shift.dropna(subset=[target]).sort_values("timestamp_hour").reset_index(drop=True)
@@ -767,6 +794,7 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
             "gamma":            trial.suggest_float("gamma", 0.0, 5.0),
             "seed": 42,
             "verbosity": 0,
+            "nthread": nthread,
         }
 
         if n < 80:
@@ -810,11 +838,14 @@ def _make_optuna_objective(df_shift: pd.DataFrame, target: str, feature_cols: li
 
 
 def _early_stop_callback(study: optuna.Study, trial: optuna.Trial) -> None:
-    """Stop Optuna search when the last 20 trials have converged (range < 0.005)."""
-    if len(study.trials) >= 20:
-        recent = [t.value for t in study.trials[-20:] if t.value is not None]
-        if recent and (max(recent) - min(recent)) < 0.005:
-            study.stop()
+    """Stop when the best value hasn't improved by >0.5% over the last 30 trials."""
+    if len(study.trials) >= 30:
+        completed = [t.value for t in study.trials if t.value is not None and t.value < float("inf")]
+        if len(completed) >= 30:
+            best_so_far = min(completed[:-30]) if len(completed) > 30 else completed[0]
+            best_recent = min(completed[-30:])
+            if best_so_far > 0 and (best_so_far - best_recent) / best_so_far < 0.005:
+                study.stop()
 
 
 def tune_and_train_shift_model(
@@ -824,18 +855,15 @@ def tune_and_train_shift_model(
     shift_mask_fn,
     feature_cols: list[str],
     n_trials: int = 100,
+    nthread: int = 0,
 ) -> tuple[xgb.Booster | None, dict, list[str]]:
     """
     Run Optuna (n_trials) for one shift+target, train final model on full shift data.
 
     Returns (booster, best_params, feat_avail) — booster is None if insufficient data.
+    Set nthread=1 when running multiple studies in parallel to avoid OpenMP contention.
     """
-    hour_col = (
-        df["timestamp_hour"].dt.hour
-        if "timestamp_hour" in df.columns
-        else df["hour"]
-    )
-    mask = shift_mask_fn(hour_col)
+    mask = shift_mask_fn(df)
     df_shift = df[mask].copy()
 
     if len(df_shift) < 80:
@@ -843,7 +871,7 @@ def tune_and_train_shift_model(
         return None, {}, []
 
     obj_fn, feat_avail, df_s, X_all, y_all = _make_optuna_objective(
-        df_shift, target, feature_cols
+        df_shift, target, feature_cols, nthread=nthread
     )
 
     journal_path = str(MODELS_DIR / "optuna_journal.log")
@@ -875,6 +903,7 @@ def tune_and_train_shift_model(
         "gamma":            best["gamma"],
         "seed": 42,
         "verbosity": 0,
+        "nthread": nthread,
     }
     n_val = max(int(len(X_all) * 0.15), 30)
     X_tr, y_tr = X_all[:-n_val], y_all[:-n_val]
@@ -915,19 +944,23 @@ def train_shift_models(
     target: str,
     feature_cols: list[str],
     global_model: xgb.XGBRegressor,
-    n_trials: int = 100,
+    n_trials: int = 150,
+    n_trials_lgbm: int = 50,
 ) -> None:
     """
     Train per-shift XGBoost (asymmetric loss) + LightGBM (quantile τ=0.70) models,
     blend them via grid-search weight on the shift's training data, and save all artefacts.
+
+    XGB uses more trials (fast — has within-trial pruning callback).
+    LGBM uses fewer trials (slow — no within-trial pruning, all folds run to completion).
+    Warm-start from journal is the primary speed lever on routine retrains.
     """
     print(f"\n  --- Shift-specific models for {target} ---")
 
-    hour_col = df["timestamp_hour"].dt.hour
     feat_avail_global = [c for c in feature_cols if c in df.columns]
 
     for shift_name, mask_fn in SHIFT_SEGMENTS.items():
-        mask = mask_fn(hour_col)
+        mask = mask_fn(df)
         df_shift = df[mask].dropna(subset=[target]).copy()
 
         if len(df_shift) < 80:
@@ -961,7 +994,7 @@ def train_shift_models(
         # ── LightGBM (quantile τ=0.70) ────────────────────────────────────
         print(f"    [{shift_name}] tuning LGBM quantile (τ={LGBM_QUANTILE})…")
         lgbm_bst, lgbm_params, lgbm_feat = tune_and_train_lgbm_shift_model(
-            df, target, shift_name, mask_fn, feature_cols, n_trials=n_trials
+            df, target, shift_name, mask_fn, feature_cols, n_trials=n_trials_lgbm
         )
 
         if lgbm_bst is not None:
@@ -1020,7 +1053,7 @@ def predict_blended(
     preds_point = np.zeros(len(df))
 
     for shift_name, mask_fn in SHIFT_SEGMENTS.items():
-        mask = mask_fn(df["hour"])
+        mask = mask_fn(df)
         if mask.sum() == 0:
             continue
 
@@ -1084,7 +1117,7 @@ def calibrate_conformal_intervals(
     preds = np.zeros(len(df_cal))
 
     for shift_name, mask_fn in SHIFT_SEGMENTS.items():
-        mask = mask_fn(df_cal["hour"])
+        mask = mask_fn(df_cal)
         if mask.sum() == 0:
             continue
         subset = df_cal[mask]
@@ -1128,7 +1161,6 @@ def retrain_shift_models_from_params(
     is rebuilt (new columns) but we want to avoid another hour of tuning.
     """
     print(f"\n  --- Fast retrain (skip-optuna) for {target} ---")
-    hour_col = df["timestamp_hour"].dt.hour
     feat_avail_global = [c for c in feature_cols if c in df.columns]
 
     for shift_name, mask_fn in SHIFT_SEGMENTS.items():
@@ -1143,7 +1175,7 @@ def retrain_shift_models_from_params(
             meta = json.load(f)
         best = meta["best_params"]
 
-        mask = mask_fn(hour_col)
+        mask = mask_fn(df)
         df_shift = df[mask].dropna(subset=[target]).copy()
         if len(df_shift) < 80:
             print(f"    [{shift_name}] Insufficient data, skipping.")
@@ -1257,12 +1289,33 @@ def main():
         "--skip-optuna", action="store_true",
         help="Skip Optuna tuning — load existing best_params and retrain final models only (~5 min).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--force-retune", action="store_true",
+        help="Delete existing Optuna journals before tuning so all studies start from scratch. "
+             "Use after significant feature changes. Omit for warm-start (recommended for routine retrains).",
+    )
+    args, _ = parser.parse_known_args()  # ignore args from parent caller (e.g. refresh_data.py --retrain)
+
+    if args.force_retune and not args.skip_optuna:
+        for journal in ["optuna_journal.log", "optuna_lgbm_journal.log"]:
+            p = MODELS_DIR / journal
+            if p.exists():
+                p.unlink()
+                print(f"  Deleted {p} (--force-retune)")
+
 
     features_path = Path("data/processed/features.parquet")
     print(f"Loading {features_path} ...")
     df = pd.read_parquet(features_path)
     print(f"  Shape: {df.shape}")
+
+    # Exclude dead hours (2–8am): avg 0.1 items/hr, inflate MAPE, waste model capacity.
+    # Dashboard predictions for those hours still work via shift models (return 0).
+    hour_col = pd.to_datetime(df["timestamp_hour"]).dt.hour
+    dead_mask = hour_col.between(2, 8)
+    n_dead = dead_mask.sum()
+    df = df[~dead_mask].reset_index(drop=True)
+    print(f"  Excluded {n_dead:,} dead-hour rows (2–8am). Training shape: {df.shape}")
 
     for target in TARGETS:
         print(f"\n{'='*60}")
@@ -1320,8 +1373,8 @@ def main():
             print(f"\n  Fast retrain (--skip-optuna): using existing best_params…")
             retrain_shift_models_from_params(df, target, feature_cols, xgb_final)
         else:
-            print(f"\n  Running Optuna shift-specific tuning (100 trials × 4 shifts × 2 models)…")
-            train_shift_models(df, target, feature_cols, xgb_final, n_trials=100)
+            print(f"\n  Running Optuna shift-specific tuning (XGB 150 + LGBM 50 trials × 4 shifts)…")
+            train_shift_models(df, target, feature_cols, xgb_final, n_trials=150, n_trials_lgbm=50)
 
         # Calibrate conformal intervals using last 15% of data as calibration set
         n_cal = max(int(len(df) * 0.15), 200)

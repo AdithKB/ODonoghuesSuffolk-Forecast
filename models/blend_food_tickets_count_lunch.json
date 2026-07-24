@@ -1,6 +1,6 @@
 {
-  "xgb_weight": 0.1,
-  "lgbm_weight": 0.9,
+  "xgb_weight": 1.0,
+  "lgbm_weight": 0.0,
   "lgbm_quantile": 0.7,
   "feat_avail": [
     "orders_count_lag_24h",
@@ -60,7 +60,6 @@
     "major_sports_event_flag",
     "city_event_flag",
     "st_patricks_week_flag",
-    "special_event_flag",
     "event_intensity",
     "tourism_pressure",
     "weekend_x_music",
@@ -85,6 +84,8 @@
     "suffolk_footfall_roll_24h",
     "orders_count_same_slot_4w_avg",
     "food_tickets_count_same_slot_4w_avg",
+    "orders_count_same_wd_hour_roll8",
+    "food_tickets_count_same_wd_hour_roll8",
     "tv_sports_flag",
     "tv_sports_intensity",
     "match_kickoff_proximity",
@@ -100,16 +101,23 @@
     "is_after_work_window",
     "budget_day_flag",
     "cheltenham_festival_flag",
-    "sunny_afternoon"
+    "sunny_afternoon",
+    "late_night_x_fri_sat",
+    "orders_count_trend_90d",
+    "orders_count_yoy_ratio",
+    "food_tickets_count_trend_90d",
+    "food_tickets_count_yoy_ratio",
+    "orders_count_ewma_168",
+    "food_tickets_count_ewma_168"
   ],
   "lgbm_best_params": {
-    "num_leaves": 248,
-    "learning_rate": 0.02635755213958133,
-    "min_data_in_leaf": 11,
-    "feature_fraction": 0.32467967063898173,
-    "bagging_fraction": 0.8358718559010285,
-    "reg_alpha": 0.017622277363673555,
-    "reg_lambda": 2.6152394078976995,
-    "min_gain_to_split": 0.3351442355948098
+    "num_leaves": 93,
+    "learning_rate": 0.057339108375531966,
+    "min_data_in_leaf": 12,
+    "feature_fraction": 0.349236478498295,
+    "bagging_fraction": 0.7715450385867073,
+    "reg_alpha": 0.0005860196133140759,
+    "reg_lambda": 0.004543872495447446,
+    "min_gain_to_split": 0.6213771036904753
   }
 }

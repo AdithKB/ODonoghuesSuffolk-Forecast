@@ -31,6 +31,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--retrain", action="store_true",
                         help="Retrain XGBoost models after refreshing data")
+    parser.add_argument("--force-retune", action="store_true",
+                        help="Delete Optuna journals before retraining so all studies start fresh. "
+                             "Use after adding new features. Omit for warm-start on routine retrains.")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -112,15 +115,17 @@ def main():
     import pandas as pd
     from datetime import timedelta
     from src.features import build_features
+    from src.ingest_titan import build_titan_dataset
 
-    raw_path = ROOT / "data/synthetic/odonoghues_hourly.csv"
-    raw = pd.read_csv(raw_path)
+    titan_dir = ROOT / "data/raw/pos_titanbi"
+    print(f"     Loading real POS data from {titan_dir} …")
+    raw = build_titan_dataset(titan_dir, verbose=True)
 
     # Append 7 days of future stub rows so the enrichment join (weather forecast,
     # sports fixtures, cruise schedule) populates real signals for upcoming dates.
     # Lag features compute correctly because they look back into real history.
     last_date = pd.to_datetime(raw["timestamp_hour"]).max().date()
-    open_hours = list(range(9, 24)) + [0, 1]
+    open_hours = list(range(9, 24)) + [0, 1, 2]
     future_stubs = [
         {
             "timestamp_hour": pd.Timestamp(last_date + timedelta(days=d)) + pd.Timedelta(hours=h),
@@ -143,6 +148,10 @@ def main():
     # 4. Optional retrain
     if args.retrain:
         step("4/4  Retraining XGBoost models…")
+        if args.force_retune:
+            sys.argv = [sys.argv[0], "--force-retune"]
+        else:
+            sys.argv = [sys.argv[0]]
         from src.model import main as train_main
         train_main()
 

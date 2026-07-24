@@ -21,6 +21,7 @@ from src.model import (
     get_hour_shift, SHIFT_SEGMENTS,
 )
 from src.conformal import compute_hourly_quantiles, apply_intervals
+from src.features import label_busyness
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -442,7 +443,7 @@ def _predict_with_shift_routing(
     handled = np.zeros(len(X), dtype=bool)
     for shift_name, bst in shift_models.items():
         mask_fn = SHIFT_SEGMENTS[shift_name]
-        mask = mask_fn(hours)
+        mask = mask_fn(X).values  # X is a DataFrame with "hour"/"weekday" cols
         if not mask.any():
             continue
         dmat = xgb.DMatrix(X[mask].values, feature_names=feat_cols)
@@ -727,10 +728,8 @@ def generate_briefing(forecast, forecast_date):
     total = float(forecast["orders_count_xgb"].sum()) if "orders_count_xgb" in forecast.columns else 0
 
     # ── Headline ────────────────────────────────────────────────────────────
-    if total > 650: vibe = "Slammed"
-    elif total > 450: vibe = "Busy"
-    elif total > 280: vibe = "Standard"
-    else: vibe = "Quiet"
+    vibe = label_busyness(total, wd)
+    if vibe == "Normal": vibe = "Standard"  # dashboard copy uses "Standard"
 
     drivers = []
     if nye:         drivers.append("New Year's Eve")
@@ -1148,7 +1147,7 @@ def main():
         st.markdown("<p class='sb-section-label'>Data Sync</p>", unsafe_allow_html=True)
         if st.button("Refresh Live Data", use_container_width=True):
             with st.spinner("Fetching..."):
-                subprocess.run([sys.executable, "src/refresh_data.py"], capture_output=True, cwd=Path(__file__).parent.parent)
+                subprocess.run([sys.executable, "refresh_data.py"], capture_output=True, cwd=Path(__file__).parent.parent)
                 st.cache_data.clear()
                 st.rerun()
 

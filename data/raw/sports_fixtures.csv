@@ -3842,16 +3842,16 @@ date,kickoff_local,competition,home_team,away_team,intensity,is_ireland_match
 2026-07-04,18:00,World Cup,Canada,Morocco,3,False
 2026-07-04,22:00,World Cup,Paraguay,France,3,False
 2026-07-05,21:00,World Cup,Brazil,Norway,3,False
-2026-07-06,01:00,World Cup,Mexico,England,3,False
+2026-07-06,02:00,World Cup,Mexico,England,3,False
 2026-07-06,20:00,World Cup,Portugal,Spain,3,False
 2026-07-07,01:00,World Cup,United States,Belgium,3,False
 2026-07-07,17:00,World Cup,Argentina,Egypt,3,False
 2026-07-07,21:00,World Cup,Switzerland,Colombia,3,False
 2026-07-09,21:00,World Cup,France,Morocco,3,False
-2026-07-10,20:00,World Cup,,,3,False
-2026-07-11,22:00,World Cup,,,3,False
-2026-07-12,02:00,World Cup,,,3,False
-2026-07-14,20:00,World Cup,,,3,False
-2026-07-15,20:00,World Cup,,,3,False
-2026-07-18,22:00,World Cup,,,3,False
-2026-07-19,20:00,World Cup,,,3,False
+2026-07-10,20:00,World Cup,Spain,Belgium,3,False
+2026-07-11,22:00,World Cup,Norway,England,3,False
+2026-07-12,02:00,World Cup,Argentina,Switzerland,3,False
+2026-07-14,20:00,World Cup,France,Spain,3,False
+2026-07-15,20:00,World Cup,England,Argentina,3,False
+2026-07-18,22:00,World Cup,France,England,3,False
+2026-07-19,20:00,World Cup,Spain,Argentina,3,False
