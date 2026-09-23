@@ -151,13 +151,23 @@ def date_range(start: date, end: date):
         d += timedelta(days=1)
 
 
-def load_already_done(out_path: Path) -> set[str]:
+def load_already_done(out_dir: Path) -> set[str]:
+    """
+    Scan every hourly_*.csv already in out_dir, not just the file this run
+    would write to. The output filename embeds start/end dates, and --end
+    defaults to "yesterday" — so without this, every day's run gets a new
+    filename, out_path never exists yet, and --resume silently re-scrapes
+    the entire history from scratch instead of just the new day(s).
+    ingest_titan.py already merges + dedups across files, so multiple
+    incremental files are fine to leave in place.
+    """
     done = set()
-    if out_path.exists():
-        with open(out_path) as f:
-            reader = csv.DictReader(f)
+    for f in out_dir.glob("hourly_*.csv"):
+        with open(f) as fh:
+            reader = csv.DictReader(fh)
             for row in reader:
-                done.add(row["date"])
+                if row.get("date"):
+                    done.add(row["date"])
     return done
 
 
@@ -186,9 +196,18 @@ def main():
     out_path = OUT_DIR / f"hourly_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
     print(f"Output: {out_path}")
 
-    already_done = load_already_done(out_path) if args.resume else set()
+    already_done = load_already_done(OUT_DIR) if args.resume else set()
     if already_done:
-        print(f"Resuming — {len(already_done)} dates already done")
+        print(f"Resuming — {len(already_done)} dates already done (across all existing hourly_*.csv files)")
+
+    dates = list(date_range(start_date, end_date))
+    total = len(dates)
+    failed = []
+
+    remaining = [d for d in dates if d.isoformat() not in already_done]
+    if args.resume and not remaining:
+        print("Nothing new to fetch — all requested dates already scraped.")
+        return
 
     session = make_session()
 
@@ -199,10 +218,6 @@ def main():
     except Exception as e:
         print(f"ERROR: {e}")
         sys.exit(1)
-
-    dates = list(date_range(start_date, end_date))
-    total = len(dates)
-    failed = []
 
     write_header = not out_path.exists() or not args.resume
     with open(out_path, "a" if args.resume else "w", newline="") as f:

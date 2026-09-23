@@ -135,11 +135,20 @@ def add_ewma_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
 
 def add_trend_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
     """
-    Long-horizon trend features computed on daily totals then broadcast to hours.
-    Daily aggregation avoids dead-hour (2–8am near-zero) dilution.
+    Long- and short-horizon trend features computed on daily totals then
+    broadcast to hours. Daily aggregation avoids dead-hour (2–8am near-zero)
+    dilution.
 
-    - trend_90d : 90-day rolling mean of daily totals (captures seasonal arc)
-    - yoy_ratio : 28-day rolling avg / same window 364 days ago (growth signal)
+    - trend_90d           : 90-day rolling mean of daily totals (seasonal arc)
+    - trend_21d           : 21-day rolling mean (reacts to a 2-3 week swing that
+                             trend_90d is too slow to see — e.g. a demand slide
+                             that's still in progress)
+    - trend_ratio_21_90   : trend_21d / trend_90d. <1 = currently running below
+                             the longer-run baseline (a live dip), >1 = running
+                             above it. Gives the model an explicit "are we in a
+                             dip or a spike right now" signal instead of making
+                             it infer one from two separately-scaled numbers.
+    - yoy_ratio           : 28-day rolling avg / same window 364 days ago (growth signal)
     """
     ts = pd.to_datetime(df["timestamp_hour"])
     date_idx = pd.to_datetime(ts.dt.date)
@@ -153,15 +162,26 @@ def add_trend_features(df: pd.DataFrame, target: str) -> pd.DataFrame:
     # 90-day rolling mean on daily totals, shift by 1 day, min 14 days of data
     roll90 = daily.shift(1).rolling(90, min_periods=14).mean().fillna(0.0)
 
+    # 21-day rolling mean — same construction, shorter window
+    roll21 = daily.shift(1).rolling(21, min_periods=7).mean().fillna(0.0)
+
+    # Ratio of short- to long-window trend. Only meaningful once both windows
+    # have real data; before that (or if trend_90d is ~0) default to 1.0 (neutral).
+    ratio = (roll21 / roll90.replace(0.0, np.nan)).clip(0.2, 5.0).fillna(1.0)
+
     # YoY: 28-day avg divided by same 28-day window 364 days prior
     roll28      = daily.shift(1).rolling(28, min_periods=7).mean()
     roll28_1y   = roll28.shift(364)
     yoy         = (roll28 / roll28_1y.replace(0.0, np.nan)).clip(0.3, 3.0).fillna(1.0)
 
     roll90_map = roll90.to_dict()
+    roll21_map = roll21.to_dict()
+    ratio_map  = ratio.to_dict()
     yoy_map    = yoy.to_dict()
 
     df[f"{target}_trend_90d"] = date_idx.map(roll90_map).fillna(0.0).astype(float)
+    df[f"{target}_trend_21d"] = date_idx.map(roll21_map).fillna(0.0).astype(float)
+    df[f"{target}_trend_ratio_21_90"] = date_idx.map(ratio_map).fillna(1.0).astype(float)
     df[f"{target}_yoy_ratio"]  = date_idx.map(yoy_map).fillna(1.0).astype(float)
 
     return df
@@ -594,6 +614,66 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_event_recency_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Signals how much the recent past — the same lookback window used by
+    same_slot_4w_avg / lag_168h / roll_mean_168 — was skewed by an unusually
+    large one-off event or a data outage, so the model can learn to discount
+    an anchor that's inflated or deflated rather than take it at face value.
+
+    event_impact_score_max_28d : max daily event_impact_score in the trailing
+        28 days (shift 1 day first — no leakage). Example: a big PPV boxing
+        night nearly doubles a normal Saturday. That Saturday sits inside
+        same_slot_4w_avg and lag_168h for the following two weeks, pulling
+        next-Saturday's forecast up even though nothing comparable is
+        happening — this flag lets the model discount the anchor instead of
+        carrying the spike forward.
+
+    data_gap_recent_28d : whether any of the trailing 28 days was a likely
+        POS ingestion gap rather than a real zero-demand day (flagged as a
+        day with total orders_count == 0 that isn't Christmas Day — the only
+        day the venue is reliably actually closed; historically ~14 of 16
+        such zero-total days were scraper outages, not closures). Without
+        this, a multi-day scraper gap quietly depresses lag_168h/
+        same_slot_4w_avg/EWMA for the following weeks exactly the way an
+        inflated event spike inflates them — same mechanism, opposite sign.
+    """
+    ts = pd.to_datetime(df["timestamp_hour"])
+    date_idx = pd.to_datetime(ts.dt.date)
+
+    if "event_impact_score" in df.columns:
+        daily_max = (
+            pd.Series(df["event_impact_score"].fillna(0).values, index=date_idx)
+            .groupby(level=0).max()
+            .sort_index()
+        )
+        roll_max_28 = daily_max.shift(1).rolling(28, min_periods=1).max().fillna(0.0)
+        df["event_impact_score_max_28d"] = (
+            date_idx.map(roll_max_28.to_dict()).fillna(0.0).astype(float)
+        )
+    else:
+        df["event_impact_score_max_28d"] = 0.0
+
+    if "orders_count" in df.columns:
+        daily_total = (
+            pd.Series(df["orders_count"].fillna(0).values, index=date_idx)
+            .groupby(level=0).sum()
+            .sort_index()
+        )
+        is_christmas = (daily_total.index.month == 12) & (daily_total.index.day == 25)
+        is_gap_day = (daily_total == 0) & ~is_christmas
+        roll_gap_28 = (
+            is_gap_day.astype(float).shift(1).rolling(28, min_periods=1).max().fillna(0.0)
+        )
+        df["data_gap_recent_28d"] = (
+            date_idx.map(roll_gap_28.to_dict()).fillna(0.0).astype(float)
+        )
+    else:
+        df["data_gap_recent_28d"] = 0.0
+
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Busyness tier — weekday-adjusted, calibrated on 938 days of Titan POS data
 # ---------------------------------------------------------------------------
@@ -758,6 +838,7 @@ def build_features(
     df = add_schedule_features(df)
     df = add_external_features(df)
     df = add_interaction_features(df)
+    df = add_event_recency_features(df)
 
     if drop_na:
         lag_cols = [c for c in df.columns if "_lag_" in c or "_roll_" in c]

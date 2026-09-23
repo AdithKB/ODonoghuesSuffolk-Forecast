@@ -10,6 +10,7 @@ Models saved to models/ for dashboard consumption.
 """
 
 import json
+import subprocess
 import numpy as np
 import pandas as pd
 import joblib
@@ -156,8 +157,20 @@ SAFE_FOR_NEXT_DAY = [
     # Long-horizon trend (90-day rolling + year-over-year ratio)
     "orders_count_trend_90d", "orders_count_yoy_ratio",
     "food_tickets_count_trend_90d", "food_tickets_count_yoy_ratio",
+    # Short-horizon trend (21-day) + ratio vs the 90-day baseline — reacts to
+    # a 2-3 week swing trend_90d is too slow to see (an in-progress dip/spike)
+    "orders_count_trend_21d", "orders_count_trend_ratio_21_90",
+    "food_tickets_count_trend_21d", "food_tickets_count_trend_ratio_21_90",
     # EWMA 168h (1-week span) — safe for next-day, discounts older obs
     "orders_count_ewma_168", "food_tickets_count_ewma_168",
+    # Was there an outsized one-off event in the last 4 weeks? Lets the model
+    # discount same_slot_4w_avg/lag_168h when they're inflated by a spike that
+    # won't repeat (e.g. a PPV boxing night skewing the next 2-3 Saturdays).
+    "event_impact_score_max_28d",
+    # Was there a likely POS data-gap day (not Christmas) in the last 4 weeks?
+    # Same idea, opposite sign — a scraper outage depresses the anchors instead
+    # of inflating them.
+    "data_gap_recent_28d",
 ]
 
 # Full feature set (adds intra-day lags — usable for same-day nowcasting)
@@ -525,6 +538,83 @@ def summarise_cv(results: list[FoldResult], label: str) -> pd.DataFrame:
     if df["shift_accuracy"].notna().any():
         print(f"  Shift accuracy: {df['shift_accuracy'].mean():.1%} ± {df['shift_accuracy'].std():.1%}")
     return df
+
+
+def log_retrain_history(
+    target: str,
+    b_summary: pd.DataFrame,
+    x_summary: pd.DataFrame,
+    improvement: float,
+    last_fold: "FoldResult",
+    log_path: Path | None = None,
+    regression_threshold_pct: float = 15.0,
+) -> None:
+    """
+    Append this retrain's CV metrics to models/retrain_history.csv and warn if
+    accuracy on the most recent walk-forward fold regressed materially vs the
+    last recorded retrain.
+
+    last_fold (the final entry in walk_forward_cv's results) is trained only
+    on data before its cutoff and tested on the ~4 weeks right after — the
+    closest thing available to a canary check on "how well would this model
+    have done very recently" without a separate held-out training run. It is
+    NOT identical to the deployed model (which trains on a bit more data
+    still), but it is a genuine, already-computed, zero-extra-cost signal.
+
+    This does not block or auto-rollback a bad retrain (no promotion gate) —
+    it makes regression visible in the log instead of silent, which is the
+    main problem it's solving: nothing previously tracked retrain-to-retrain
+    accuracy at all.
+    """
+    if log_path is None:
+        log_path = MODELS_DIR / "retrain_history.csv"
+
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=MODELS_DIR.parent, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        commit = ""
+
+    row = {
+        "timestamp": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "git_commit": commit,
+        "target": target,
+        "cv_mae_mean": round(float(x_summary["mae"].mean()), 3),
+        "cv_mape_mean": round(float(x_summary["mape"].mean()), 3),
+        "baseline_mae_mean": round(float(b_summary["mae"].mean()), 3),
+        "improvement_pct": round(float(improvement), 2),
+        "last_fold_cutoff": str(last_fold.cutoff),
+        "last_fold_mae": round(float(last_fold.mae), 3),
+        "last_fold_n_test": int(last_fold.n_test),
+    }
+
+    history = pd.read_csv(log_path) if log_path.exists() else pd.DataFrame()
+    prior = history[history["target"] == target] if not history.empty else pd.DataFrame()
+
+    if not prior.empty:
+        prev_mae = float(prior.iloc[-1]["last_fold_mae"])
+        delta_pct = 100 * (row["last_fold_mae"] - prev_mae) / prev_mae if prev_mae else 0.0
+        if delta_pct > regression_threshold_pct:
+            verdict = "REGRESSED"
+        elif delta_pct < -5:
+            verdict = "improved"
+        else:
+            verdict = "stable"
+        print(f"\n  [retrain-history] {target}: most-recent-fold MAE {prev_mae:.2f} -> "
+              f"{row['last_fold_mae']:.2f} ({delta_pct:+.1f}%) — {verdict}")
+        if verdict == "REGRESSED":
+            print(f"  [retrain-history] WARNING: {target}'s recent-window accuracy is "
+                  f"meaningfully worse than the last recorded retrain. Check data quality "
+                  f"before trusting these models in production — `git diff` / `git checkout "
+                  f"-- models/` can revert to the previous commit's model files if needed.")
+    else:
+        print(f"\n  [retrain-history] {target}: first recorded retrain — "
+              f"last-fold MAE={row['last_fold_mae']:.2f} (baseline for future comparisons)")
+
+    history = pd.concat([history, pd.DataFrame([row])], ignore_index=True)
+    history.to_csv(log_path, index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -967,12 +1057,23 @@ def train_shift_models(
             print(f"    [{shift_name}] Insufficient data ({len(df_shift)} rows), skipping.")
             continue
 
-        X_shift = df_shift[feat_avail_global].fillna(0)
-        y_shift = df_shift[target].values
+        # Held-out chronological slice — the SAME last-15% window used for early
+        # stopping inside tune_and_train_shift_model / tune_and_train_lgbm_shift_model.
+        # All reported MAEs and the blend weight below are computed on this slice
+        # only, not the full shift dataset. Reporting/blend-selecting on the full
+        # set would be ~85% in-sample (the models were fit on that portion), which
+        # optimistically biases both the printed numbers and the chosen blend
+        # weight toward whichever model memorised training data better rather
+        # than whichever actually generalises.
+        n_val = max(int(len(df_shift) * 0.15), 30)
+        df_val = df_shift.iloc[-n_val:]
+        X_val_global = df_val[feat_avail_global].fillna(0)
+        y_val = df_val[target].values
 
-        before_preds = np.maximum(global_model.predict(X_shift), 0)
-        before_mae   = mean_absolute_error(y_shift, before_preds)
-        print(f"    [{shift_name}] {len(df_shift)} rows | Global MAE={before_mae:.2f} | tuning XGB…")
+        before_preds = np.maximum(global_model.predict(X_val_global), 0)
+        before_mae   = mean_absolute_error(y_val, before_preds)
+        print(f"    [{shift_name}] {len(df_shift)} rows ({n_val} held out for eval) | "
+              f"Global MAE={before_mae:.2f} | tuning XGB…")
 
         # ── XGBoost (asymmetric custom loss) ──────────────────────────────
         bst, best_params, feat_used = tune_and_train_shift_model(
@@ -981,9 +1082,9 @@ def train_shift_models(
         if bst is None:
             continue
 
-        dshift = xgb.DMatrix(df_shift[feat_used].fillna(0).values, feature_names=feat_used)
-        xgb_preds = np.maximum(bst.predict(dshift), 0)
-        xgb_mae   = mean_absolute_error(y_shift, xgb_preds)
+        dval = xgb.DMatrix(df_val[feat_used].fillna(0).values, feature_names=feat_used)
+        xgb_preds = np.maximum(bst.predict(dval), 0)
+        xgb_mae   = mean_absolute_error(y_val, xgb_preds)
 
         model_path = MODELS_DIR / f"xgb_{target}_{shift_name}.json"
         bst.save_model(str(model_path))
@@ -998,13 +1099,14 @@ def train_shift_models(
         )
 
         if lgbm_bst is not None:
-            lgbm_preds = np.maximum(lgbm_bst.predict(df_shift[lgbm_feat].fillna(0).values), 0)
-            lgbm_mae   = mean_absolute_error(y_shift, lgbm_preds)
+            lgbm_preds = np.maximum(lgbm_bst.predict(df_val[lgbm_feat].fillna(0).values), 0)
+            lgbm_mae   = mean_absolute_error(y_val, lgbm_preds)
 
-            # ── Optimal blend weight ──────────────────────────────────────
-            w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_shift)
+            # ── Optimal blend weight (chosen on the same held-out slice, not
+            # in-sample data, so it reflects which model actually generalises) ──
+            w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_val)
             blend_preds = w_xgb * xgb_preds + (1 - w_xgb) * lgbm_preds
-            blend_mae   = mean_absolute_error(y_shift, np.maximum(blend_preds, 0))
+            blend_mae   = mean_absolute_error(y_val, np.maximum(blend_preds, 0))
 
             lgbm_path = MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"
             lgbm_bst.save_model(str(lgbm_path))
@@ -1216,9 +1318,12 @@ def retrain_shift_models_from_params(
             verbose_eval=False,
         )
 
-        dshift = xgb.DMatrix(X_all, feature_names=feat_avail)
-        xgb_preds = np.maximum(bst.predict(dshift), 0)
-        xgb_mae   = mean_absolute_error(y_all, xgb_preds)
+        # Evaluate/report on the held-out val slice only (X_vl/y_vl) — X_all
+        # is ~85% the same rows bst just trained on via dtrain, so scoring
+        # against it would be mostly in-sample and optimistically biased.
+        dval_eval = xgb.DMatrix(X_vl, feature_names=feat_avail)
+        xgb_preds = np.maximum(bst.predict(dval_eval), 0)
+        xgb_mae   = mean_absolute_error(y_vl, xgb_preds)
 
         bst.save_model(str(MODELS_DIR / f"xgb_{target}_{shift_name}.json"))
         with open(params_path, "w") as fh:
@@ -1246,19 +1351,24 @@ def retrain_shift_models_from_params(
                     "verbosity":      -1,
                     "seed": 42,
                 }
-                train_data = lgb.Dataset(X_all, label=y_all, feature_name=feat_avail)
+                # Same held-out split as XGBoost above — train on X_tr, early-stop
+                # AND evaluate on X_vl. Previously this validated against its own
+                # training set (valid_sets=[train_data]), which makes early
+                # stopping nearly inert and evaluation fully in-sample.
+                ds_tr = lgb.Dataset(X_tr, label=y_tr, feature_name=feat_avail)
+                ds_vl = lgb.Dataset(X_vl, label=y_vl, reference=ds_tr)
                 lgbm_bst = lgb.train(
-                    lgbm_full_params, train_data,
+                    lgbm_full_params, ds_tr,
                     num_boost_round=500,
-                    valid_sets=[train_data],
+                    valid_sets=[ds_vl],
                     callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)],
                 )
-                lgbm_preds = np.maximum(lgbm_bst.predict(X_all), 0)
-                lgbm_mae   = mean_absolute_error(y_all, lgbm_preds)
+                lgbm_preds = np.maximum(lgbm_bst.predict(X_vl), 0)
+                lgbm_mae   = mean_absolute_error(y_vl, lgbm_preds)
 
-                w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_all)
+                w_xgb = _compute_blend_weight(xgb_preds, lgbm_preds, y_vl)
                 blend_preds = w_xgb * xgb_preds + (1 - w_xgb) * lgbm_preds
-                blend_mae   = mean_absolute_error(y_all, np.maximum(blend_preds, 0))
+                blend_mae   = mean_absolute_error(y_vl, np.maximum(blend_preds, 0))
 
                 lgbm_bst.save_model(str(MODELS_DIR / f"lgbm_{target}_{shift_name}.txt"))
                 updated_blend = {
@@ -1336,19 +1446,26 @@ def main():
         improvement = (b_summary["mae"].mean() - x_summary["mae"].mean()) / b_summary["mae"].mean() * 100
         print(f"\n  XGBoost MAE improvement over baseline: {improvement:+.1f}%")
 
-        # Export out-of-sample CV predictions for rigorous EDA
+        log_retrain_history(target, b_summary, x_summary, improvement, x_results[-1])
+
+        # Export out-of-sample CV predictions for rigorous EDA.
+        # Columns are named "actual"/"predicted" (not e.g. "orders_count"/
+        # "predicted_orders") because this export runs once per target in the
+        # loop — hardcoding orders_count-specific names here previously meant
+        # cv_out_of_sample_preds_food_tickets_count.csv was mislabeled with
+        # orders_count's column names even though the values were correct.
         cv_preds = []
         for r in x_results:
             df_fold = pd.DataFrame({
                 "timestamp_hour": r.timestamps,
-                "orders_count": r.y_true,
-                "predicted_orders": r.y_pred,
+                "actual": r.y_true,
+                "predicted": r.y_pred,
                 "fold": r.fold
             })
             cv_preds.append(df_fold)
         if cv_preds:
             cv_df = pd.concat(cv_preds, ignore_index=True)
-            cv_df["residual"] = cv_df["predicted_orders"] - cv_df["orders_count"]
+            cv_df["residual"] = cv_df["predicted"] - cv_df["actual"]
             cv_out_path = MODELS_DIR / f"cv_out_of_sample_preds_{target}.csv"
             cv_df.to_csv(cv_out_path, index=False)
             print(f"  Saved CV out-of-sample predictions to {cv_out_path}")

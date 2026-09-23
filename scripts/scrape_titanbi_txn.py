@@ -171,11 +171,21 @@ def date_range(start: date, end: date):
         d += timedelta(days=1)
 
 
-def load_done(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-    with open(path) as f:
-        return {row["date"] for row in csv.DictReader(f)}
+def load_done(out_dir: Path) -> set[str]:
+    """
+    Scan every daily_txn_*.csv already in out_dir, not just the file this run
+    would write to — same rationale as scrape_titanbi.py's load_already_done:
+    the output filename embeds "today" via the default --end, so a single
+    out_path never accumulates across days and --resume would otherwise
+    re-scrape the full history every run.
+    """
+    done = set()
+    for f in out_dir.glob("daily_txn_*.csv"):
+        with open(f) as fh:
+            for row in csv.DictReader(fh):
+                if row.get("date"):
+                    done.add(row["date"])
+    return done
 
 
 def main():
@@ -198,9 +208,18 @@ def main():
     out_path = OUT_DIR / f"daily_txn_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
     print(f"Output: {out_path}")
 
-    done = load_done(out_path) if args.resume else set()
+    done = load_done(OUT_DIR) if args.resume else set()
     if done:
-        print(f"Resuming — {len(done)} dates already done")
+        print(f"Resuming — {len(done)} dates already done (across all existing daily_txn_*.csv files)")
+
+    dates = list(date_range(start_date, end_date))
+    total = len(dates)
+    failed = []
+
+    remaining = [d for d in dates if d.isoformat() not in done]
+    if args.resume and not remaining:
+        print("Nothing new to fetch — all requested dates already scraped.")
+        return
 
     session = make_session()
     print("Fetching CSRF token...")
@@ -211,13 +230,14 @@ def main():
         print(f"ERROR: {e}")
         sys.exit(1)
 
-    dates = list(date_range(start_date, end_date))
-    total = len(dates)
-    failed = []
+    # A header is needed whenever the file doesn't already have one — i.e. it's
+    # new — regardless of --resume. (--resume only means "append instead of
+    # overwrite"; it doesn't mean the target file already exists.)
+    write_header = not out_path.exists() or not args.resume
 
     with open(out_path, "a" if args.resume else "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
-        if not args.resume:
+        if write_header:
             writer.writeheader()
 
         for i, day in enumerate(dates, 1):

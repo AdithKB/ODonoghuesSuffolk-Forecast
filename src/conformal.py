@@ -35,7 +35,7 @@ def compute_hourly_quantiles(
 
     if "residual" not in df.columns:
         pred_col = next((c for c in df.columns if "predict" in c.lower()), None)
-        act_col  = next((c for c in df.columns if c in ("orders_count", "food_tickets_count")), None)
+        act_col  = next((c for c in df.columns if c in ("actual", "orders_count", "food_tickets_count")), None)
         if pred_col and act_col:
             df["residual"] = df[pred_col] - df[act_col]
         else:
