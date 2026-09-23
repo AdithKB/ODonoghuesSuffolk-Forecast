@@ -107,17 +107,23 @@
     "orders_count_yoy_ratio",
     "food_tickets_count_trend_90d",
     "food_tickets_count_yoy_ratio",
+    "orders_count_trend_21d",
+    "orders_count_trend_ratio_21_90",
+    "food_tickets_count_trend_21d",
+    "food_tickets_count_trend_ratio_21_90",
     "orders_count_ewma_168",
-    "food_tickets_count_ewma_168"
+    "food_tickets_count_ewma_168",
+    "event_impact_score_max_28d",
+    "data_gap_recent_28d"
   ],
   "lgbm_best_params": {
-    "num_leaves": 36,
-    "learning_rate": 0.13988552805662832,
-    "min_data_in_leaf": 9,
-    "feature_fraction": 0.3450600458901964,
-    "bagging_fraction": 0.8280159648235629,
-    "reg_alpha": 7.732187865966074e-08,
-    "reg_lambda": 7.321774167057362,
-    "min_gain_to_split": 0.010268414710893839
+    "num_leaves": 35,
+    "learning_rate": 0.009679320028571418,
+    "min_data_in_leaf": 20,
+    "feature_fraction": 0.489525300951606,
+    "bagging_fraction": 0.9507411697656083,
+    "reg_alpha": 2.7824878109072926e-07,
+    "reg_lambda": 0.10346040357965366,
+    "min_gain_to_split": 0.20193827895517763
   }
 }

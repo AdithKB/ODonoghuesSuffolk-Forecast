@@ -1,6 +1,6 @@
 {
-  "xgb_weight": 0.0,
-  "lgbm_weight": 1.0,
+  "xgb_weight": 0.05,
+  "lgbm_weight": 0.95,
   "lgbm_quantile": 0.7,
   "feat_avail": [
     "orders_count_lag_24h",
@@ -107,8 +107,14 @@
     "orders_count_yoy_ratio",
     "food_tickets_count_trend_90d",
     "food_tickets_count_yoy_ratio",
+    "orders_count_trend_21d",
+    "orders_count_trend_ratio_21_90",
+    "food_tickets_count_trend_21d",
+    "food_tickets_count_trend_ratio_21_90",
     "orders_count_ewma_168",
-    "food_tickets_count_ewma_168"
+    "food_tickets_count_ewma_168",
+    "event_impact_score_max_28d",
+    "data_gap_recent_28d"
   ],
   "lgbm_best_params": {
     "num_leaves": 188,

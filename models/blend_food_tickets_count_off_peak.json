@@ -1,6 +1,6 @@
 {
-  "xgb_weight": 0.25,
-  "lgbm_weight": 0.75,
+  "xgb_weight": 0.30000000000000004,
+  "lgbm_weight": 0.7,
   "lgbm_quantile": 0.7,
   "feat_avail": [
     "orders_count_lag_24h",
@@ -107,17 +107,23 @@
     "orders_count_yoy_ratio",
     "food_tickets_count_trend_90d",
     "food_tickets_count_yoy_ratio",
+    "orders_count_trend_21d",
+    "orders_count_trend_ratio_21_90",
+    "food_tickets_count_trend_21d",
+    "food_tickets_count_trend_ratio_21_90",
     "orders_count_ewma_168",
-    "food_tickets_count_ewma_168"
+    "food_tickets_count_ewma_168",
+    "event_impact_score_max_28d",
+    "data_gap_recent_28d"
   ],
   "lgbm_best_params": {
-    "num_leaves": 31,
-    "learning_rate": 0.01594165851069525,
-    "min_data_in_leaf": 5,
-    "feature_fraction": 0.9951293696376879,
-    "bagging_fraction": 0.8896759326089357,
-    "reg_alpha": 0.000734998970683113,
-    "reg_lambda": 0.03286214374955363,
-    "min_gain_to_split": 0.42526847311385285
+    "num_leaves": 79,
+    "learning_rate": 0.0050044595154508315,
+    "min_data_in_leaf": 9,
+    "feature_fraction": 0.9720992749078957,
+    "bagging_fraction": 0.9723077011816099,
+    "reg_alpha": 2.793862340033489e-07,
+    "reg_lambda": 0.305700022715494,
+    "min_gain_to_split": 0.18588284174616904
   }
 }
