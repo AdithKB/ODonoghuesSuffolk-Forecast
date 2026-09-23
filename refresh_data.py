@@ -119,7 +119,23 @@ def main():
 
     titan_dir = ROOT / "data/raw/pos_titanbi"
     print(f"     Loading real POS data from {titan_dir} …")
-    raw = build_titan_dataset(titan_dir, verbose=True)
+    try:
+        raw = build_titan_dataset(titan_dir, verbose=True)
+    except FileNotFoundError as exc:
+        # Real POS exports are gitignored (PII policy) and only ever exist on the
+        # machine that runs scripts/scrape_titanbi.py locally — never on GH Actions
+        # or Streamlit Cloud checkouts. Skip the feature/model rebuild there instead
+        # of crashing the whole refresh; the public-signal CSVs above still get saved.
+        print(f"     WARNING: {exc}")
+        print("     No local Titan POS export found — skipping feature table rebuild "
+              "(and retrain, if requested). Public signal data above was still refreshed. "
+              "Run this on the machine with data/raw/pos_titanbi/ populated to rebuild "
+              "features.parquet and retrain models.")
+        elapsed = time.time() - t0
+        print(f"\n{'='*60}")
+        print(f"  Refresh complete in {elapsed:.1f}s (partial — no POS data)")
+        print(f"{'='*60}\n")
+        return
 
     # Append 7 days of future stub rows so the enrichment join (weather forecast,
     # sports fixtures, cruise schedule) populates real signals for upcoming dates.

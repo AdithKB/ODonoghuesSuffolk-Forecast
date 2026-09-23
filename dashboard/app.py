@@ -1149,9 +1149,25 @@ def main():
         st.markdown("<p class='sb-section-label'>Data Sync</p>", unsafe_allow_html=True)
         if st.button("Refresh Live Data", use_container_width=True):
             with st.spinner("Fetching..."):
-                subprocess.run([sys.executable, "refresh_data.py"], capture_output=True, cwd=Path(__file__).parent.parent)
-                st.cache_data.clear()
-                st.rerun()
+                result = subprocess.run(
+                    [sys.executable, "refresh_data.py"],
+                    capture_output=True, text=True, cwd=Path(__file__).parent.parent,
+                )
+                if result.returncode != 0:
+                    st.error(
+                        "Refresh failed:\n\n" + (result.stderr[-2000:] or result.stdout[-2000:])
+                    )
+                elif "skipping feature table rebuild" in result.stdout:
+                    # No rerun here — an st.rerun() would clear this message before
+                    # the user has a chance to read it, since it isn't in session_state.
+                    st.warning(
+                        "Public signal data (weather/events/footfall) refreshed, but no local "
+                        "Titan POS export was found, so the feature table and models were not "
+                        "rebuilt. Run this from a machine with data/raw/pos_titanbi/ populated."
+                    )
+                else:
+                    st.cache_data.clear()
+                    st.rerun()
 
     # St. Patrick's week is a fixed calendar event — auto-detect from the date
     _fd = forecast_date.date() if hasattr(forecast_date, "date") else forecast_date
